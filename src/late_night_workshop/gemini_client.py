@@ -7,6 +7,7 @@ Reads GEMINI_API_KEY (and optional GEMINI_MODEL) from the environment or a
 import base64
 import hashlib
 import os
+import sys
 from pathlib import Path
 
 from . import AppError
@@ -27,10 +28,15 @@ def _client():
     from dotenv import load_dotenv
     from google import genai
 
+    # Environment variables win; then .env in the working directory; then .env next to the
+    # packaged executable (so a recipient can drop one beside Late Night Pal.exe).
     load_dotenv(Path.cwd() / ".env")
-    if not os.getenv("GEMINI_API_KEY"):
+    if getattr(sys, "frozen", False):
+        load_dotenv(Path(sys.executable).parent / ".env")
+    key = (os.getenv("GEMINI_API_KEY") or "").strip().strip('"').strip("'")  # pasted keys often carry CR/quotes
+    if not key:
         raise GeminiError("missing_key", "GEMINI_API_KEY is not set. Add it to your environment or a .env file.")
-    return genai.Client()
+    return genai.Client(api_key=key)
 
 
 def model_name() -> str:

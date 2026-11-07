@@ -61,30 +61,46 @@ Headless checks:
 .venv\Scripts\python -m late_night_workshop --summarize Sample_pdf\Note_1.pdf  # one real API call -> Sample_pdf\summary.pdf
 ```
 
+## Windows handoff build
+
+**Verified on:** Windows 10 Home 22H2 (10.0.19045, 64-bit), with MiKTeX `lualatex` on PATH, on 2026-11-07. The ZIP was extracted to a fresh folder with spaces in its name, outside the checkout, and launched from an unrelated folder without the dev venv. The packaged exe was operated through Windows UI Automation: native Create/Open Workshop dialogs, Recents, then Summary of `Lectures\photosynthesis-lecture.pdf`. It wrote `Revision\summary.pdf` in 218 s (almost all of it Gemini), opened it in the default PDF viewer, and Open output folder opened Explorer on `Revision`.
+
+Build from the repository root (about 1½ minutes):
+
+```powershell
+.venv\Scripts\python -m pip install -e ".[build]"
+.venv\Scripts\python packaging\build_release.py
+```
+
+- **Share:** `dist\LateNightPal-win64.zip` (about 75 MB).
+- **After extracting, launch:** `Late Night Pal\Late Night Pal.exe`. No Python installation is needed.
+- The ZIP contains `Late Night Pal.exe`, `_internal\` (Qt, Python and the bundled prompts and templates), `Demo\Biology Demo Workshop\`, `Demo\Example output\M6 Daily Study Plan (pre-fix)\`, `.env.example` and `READ ME FIRST.txt`.
+- The build script refuses to zip `.env` files, logs, caches, `recents.json`, or any file containing the developer's key. It also keeps every path inside the ZIP under 150 characters, because Windows limits full paths to 260.
+
+**On the receiving PC:**
+
+1. Install [MiKTeX](https://miktex.org/download) and make sure `lualatex` is on PATH. Compile something once so MiKTeX finishes installing its packages and fonts before the demo.
+2. Extract the ZIP anywhere. A short path such as `C:\Demo` is safest.
+3. Provide the Gemini key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
+4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 14 bundled resources, `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
+
+The executable is windowed. Command-line modes print to the PowerShell window they were started from.
+
 ## Demo sequence (rehearsed 2026-11-07)
 
-The demo workshop is `demo\Biology Demo Workshop\`:
+The demo workshop is `Demo\Biology Demo Workshop\` in the ZIP, or `demo\Biology Demo Workshop\` in the repository:
 
 - `Lectures\photosynthesis-lecture.pdf` is a text PDF about photosynthesis.
 - `Labs\osmosis-lab-scan.pdf` is an image-only scanned osmosis lab. Its unique fact is that potato strips in **0.8 M sucrose lost 14% of their mass**, and the cells are isotonic with about 0.4 M sucrose.
 - `Revision\` is empty, ready for output.
 
-1. Launch with `.venv\Scripts\python -m late_night_workshop`. Click **Open Workshop** and choose `demo\Biology Demo Workshop` (after the first time, click it under **Recent Workshops**).
+**Before each run, copy `Biology Demo Workshop` to a fresh place** (for example your Desktop) and open that copy. The original stays clean, and every run starts with an empty `Revision\`.
+
+1. Launch `Late Night Pal.exe` (or `.venv\Scripts\python -m late_night_workshop` from the repository). Click **Open Workshop** and choose your fresh copy. Later you can reopen it from **Recent Workshops**.
 2. Click `[folder] Lectures` → `photosynthesis-lecture.pdf`, **Up**, `[folder] Labs` → `osmosis-lab-scan.pdf`, **Up**, `[folder] Revision`. **Selected Inputs** shows both relative paths.
 3. Choose **Output type: Study plan**, **Task: Make daily study plan**, **Days: 2**, leave **Folder name** empty, and tick **Efficient**. Click **Generate**.
 4. A dialog says `Labs/osmosis-lab-scan.pdf (page 1) has little or no extractable text…`. Click **Process original**.
-5. While Gemini works (1–2 min in the rehearsal; earlier runs took up to 7 min), open the **previously generated example**: `demo\Previously generated example\Daily Study Plan (rehearsal 2026-11-07)\`. The best single PDF is `Day 01
-otes.pdf`: it was built from the scan and states the 0.8 M → −14% result. Its subtitle reads `From Labs/osmosis-lab-scan.pdf`.
-6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, `Day 01
-otes.pdf` opens automatically. Use **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`. A second run lands in `Daily Study Plan (2)` and leaves the first untouched.
+5. While Gemini works (about 2 minutes in the rehearsal; earlier runs took up to 7), open the labelled example `Example output\M6 Daily Study Plan (pre-fix)\Day 01\notes.pdf`. It was built from the scan and states the 0.8 M → −14% result, and its subtitle reads `From Labs/osmosis-lab-scan.pdf`. It is the M6 rehearsal output from **before the answer-label fix**, so its *Answers* sections lack `Q1`/`Q2` labels; fresh runs label them.
+6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, `Day 01\notes.pdf` opens automatically. Use **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`.
 
-Before the next rehearsal, delete `demo\Biology Demo Workshop\Revision\Daily Study Plan*` so the first run gets the plain folder name.
-
-## Packaging probe (full packaging is M7)
-
-```powershell
-.venv\Scripts\python -m PyInstaller packaging\late-night-workshop.spec --noconfirm
-& "dist\Late Night Pal\Late Night Pal.exe" --check
-```
-
-The executable doesn't include the API key. Run it from a folder that has a `.env`, or set `GEMINI_API_KEY`. LaTeX must be installed on the machine.
+**Quick single-file demo** (verified from the packaged build): on a fresh copy, select only `Lectures\photosynthesis-lecture.pdf`, open `Revision`, choose **Single file → Summary**, then **Generate**. The result is `Revision\summary.pdf`.

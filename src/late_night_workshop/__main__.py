@@ -1,6 +1,7 @@
 """Entry point: `python -m late_night_workshop` starts the Late Night Pal desktop app.
 
-  --check            headless preflight: packaged resources + LaTeX compiler (no API call)
+  --check            headless preflight: packaged resources, LaTeX compiler, key presence (no API call)
+  --extract FILE     print the local text extraction of one PDF/PPTX/DOCX/TXT/MD file (no API call)
   --summarize FILE   headless Summary of one PDF through the shared pipeline (one API call);
                      the PDF's folder is the workshop and destination, output is summary.pdf
 """
@@ -12,10 +13,31 @@ from pathlib import Path
 from . import resource_path
 
 
+def _console_streams():
+    """The packaged exe is windowed (no console of its own). For command-line modes, write to the
+    parent console if there is one; redirected output (pipes/files) is used as-is."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        import ctypes
+        if ctypes.windll.kernel32.AttachConsole(-1):  # ATTACH_PARENT_PROCESS
+            sys.stdout = sys.stdout or open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            sys.stderr = sys.stderr or open("CONOUT$", "w", encoding="utf-8", errors="replace")
+            return
+    except (AttributeError, OSError):
+        pass
+    import io
+    sys.stdout = sys.stdout or io.StringIO()
+    sys.stderr = sys.stderr or io.StringIO()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="late-night-workshop")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--summarize", metavar="FILE")
+    parser.add_argument("--extract", metavar="FILE")
+    if len(sys.argv) > 1:
+        _console_streams()
     args = parser.parse_args()
     for stream in (sys.stdout, sys.stderr):  # Windows consoles default to cp1252
         if stream and hasattr(stream, "reconfigure"):
@@ -34,7 +56,31 @@ def main() -> int:
         except rendering.RenderError as e:
             ok = False
             print(f"latex: {e.message}")
+        import os
+        from . import gemini_client
+        try:
+            gemini_client._client()  # loads .env files; never prints the key
+            print(f"gemini key: found (model {gemini_client.model_name()})")
+        except gemini_client.GeminiError as e:
+            print(f"gemini key: {e.message}")
+        print(f"frozen build: {bool(getattr(sys, 'frozen', False))}")
         return 0 if ok else 1
+
+    if args.extract:
+        from . import converters
+        path = Path(args.extract)
+        if not converters.supported(path):
+            print(f"unsupported file type: {path.suffix}", file=sys.stderr)
+            return 1
+        try:
+            result = converters.convert(path, path.read_bytes())
+        except converters.ConversionError as e:
+            print(f"error [{e.code}]: {e.message}", file=sys.stderr)
+            return 1
+        print(f"converter: {result['converter']} (cache {result['cache']})")
+        for u in result["units"]:
+            print(f"[{u['unit']} {u['number'] or ''}] {u['text']}")
+        return 0
 
     if args.summarize:
         from . import generation
