@@ -10,7 +10,6 @@ from . import AppError, resource_path
 
 STYLES = {"Technical": "styles/technical.md", "Standard": "styles/standard.md", "Simple": "styles/simple.md"}
 DEFAULT_STYLE = "Standard"
-MAX_DAYS = 30
 
 SINGLE_FILE, STUDY_PLAN = "Single file", "Study plan"
 
@@ -82,8 +81,8 @@ def validate_parameters(task_id: str, parameters: dict) -> dict:
     p = parameters or {}
     if spec["output_type"] == STUDY_PLAN:
         days = p.get("days")
-        if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= MAX_DAYS:
-            raise TaskError("invalid_parameter", f"Days must be a whole number from 1 to {MAX_DAYS}.")
+        if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+            raise TaskError("invalid_parameter", "Days must be a positive whole number (1 or more).")
         return {"days": days, "folder_name": safe_folder_name(p.get("folder_name", ""), spec["default_folder"]),
                 "language_style": DEFAULT_STYLE}
     style = p.get("language_style") or DEFAULT_STYLE

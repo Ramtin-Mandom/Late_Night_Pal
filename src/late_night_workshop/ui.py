@@ -15,6 +15,43 @@ EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This ca
                   "but diagrams, equations, tables, and formatting may be lost.")
 
 
+STAGE_LABELS = {"preparing": "Preparing", "awaiting_input": "Waiting for you", "generating": "Gemini",
+                "validating": "Checking", "rendering": "Rendering", "publishing": "Saving"}
+FAILED_STAGE = {"preparing": "Preparing inputs", "validating": "Checking the request or Gemini's response",
+                "generating": "Gemini request", "rendering": "Local PDF compilation", "publishing": "Saving"}
+NEXT_STEP = {
+    "compile_failed": "Click Generate to try again; a fresh Gemini response usually compiles. The LaTeX log is listed below.",
+    "invalid_response": "Click Generate to try again. If it keeps failing, try fewer files or a different task.",
+    "page_limit_exceeded": "Select less material, or use Notes/Summary instead of a one-page cheat sheet.",
+    "api_quota": "Wait a minute, then click Generate again.",
+    "api_network": "Check your internet connection, then click Generate again.",
+    "api_auth": "Fix GEMINI_API_KEY in .env or your environment, restart the app, then Generate.",
+    "missing_key": "Add GEMINI_API_KEY to .env or your environment, restart the app, then Generate.",
+    "api_model": "Set GEMINI_MODEL to an available model, restart the app, then Generate.",
+    "api_limit": "Select fewer files or fewer days, then Generate.",
+    "missing_latex": "Install MiKTeX (lualatex), restart the app, then Generate.",
+    "invalid_parameter": "Fix the highlighted setting, then Generate.",
+    "publish_failed": "Check the output folder is writable, then Generate again.",
+}
+
+
+def describe_progress(event: dict) -> str:
+    return f"{STAGE_LABELS.get(event.get('stage'), 'Working')}: {event['message']}"
+
+
+def describe_error(error: dict) -> str:
+    """Stage + what happened + what to do next. Nothing was published when this runs."""
+    stage = FAILED_STAGE.get(error.get("stage"), "Generation")
+    nxt = NEXT_STEP.get(error.get("code"), "Your selection and settings are unchanged; click Generate to retry.")
+    lines = [f"{stage} failed: {error.get('message', 'Unknown error.')}",
+             "Nothing was saved to the workshop; your selection and settings are unchanged.", nxt]
+    log = (error.get("details") or {}).get("log", "")
+    for line in log.splitlines():
+        if line.startswith("LaTeX log:"):
+            lines.append(line)
+    return "\n".join(lines)
+
+
 def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None,
                   efficient: bool = False) -> dict:
     """Snapshot taken at Generate time; later browsing cannot change it."""
@@ -57,7 +94,7 @@ def run_app() -> int:
 
         def run(self):
             try:
-                result = generation.generate(self.request, lambda ev: self.progress.emit(ev["message"]),
+                result = generation.generate(self.request, lambda ev: self.progress.emit(describe_progress(ev)),
                                              decide_inputs=self.decide)
             except Exception as e:  # last-resort guard so the UI never hangs in "running"
                 result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
@@ -203,7 +240,7 @@ def run_app() -> int:
             # Study plan parameters
             self.days_lbl = QLabel("Days")
             self.days_box = QSpinBox()
-            self.days_box.setRange(1, tasks.MAX_DAYS)
+            self.days_box.setRange(1, 2**31 - 1)  # no product cap; Qt's int limit only
             self.days_box.setValue(2)
             self.folder_lbl_param = QLabel("Folder name (optional)")
             self.folder_edit = QLineEdit()
@@ -385,7 +422,7 @@ def run_app() -> int:
                     self.status.setText(self.status.text() + "\n" + "\n".join(w["message"] for w in result["warnings"]))
                 self.open_document()
             else:
-                self.status.setText(f"Error: {result['error']['message']}")
+                self.status.setText(describe_error(result["error"]))
             if self.state:
                 self.refresh()  # show the new file; selection is unchanged either way
 

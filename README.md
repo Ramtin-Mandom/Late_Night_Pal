@@ -8,7 +8,7 @@ A desktop study sidekick that turns study PDFs into locally compiled study PDFs 
 | Study plan | Make daily study plan | Days, Folder name (default `Daily Study Plan`) | `Daily Study Plan/Day 01/…` through `Day NN/`, each with `notes.pdf`, `sample-questions.pdf`, `checklist.pdf` |
 | Single file | Checklist, Notes, Summary, Answer key, One-page cheat sheet, Sample questions | Language style: Technical, Standard or Simple | `checklist.pdf`, `notes.pdf`, `summary.pdf`, `answer-key.pdf`, `cheat-sheet.pdf` (exactly one page), `sample-questions.pdf` |
 
-If a name is taken, the new output gets a suffix: `summary (2).pdf` or `Study Schedule (2)/`.
+If a name is taken, the new output gets a suffix: `summary (2).pdf` or `Study Schedule (2)/`. Days can be any positive whole number; the app never shortens a plan.
 
 **Inputs:** PDF, PPTX, DOCX, TXT and Markdown. With **Efficient** off, PDFs are sent to Gemini as they are, while PPTX and DOCX are converted to text locally (the status line says so). TXT and MD always go as text. With **Efficient** on, every file is converted to text locally first, keeping page and slide numbers. That can be cheaper, but diagrams, equations, tables and formatting may be lost. Conversions are cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`. If a PDF looks scanned (little or no text), the app asks whether to **Process original** (send that file as is) or **Cancel** (nothing is sent).
 
@@ -49,6 +49,8 @@ Demo flow:
 2. Click a folder to open it, and use **Up** to go back. Click a PDF, PPTX, DOCX, TXT or MD file to select it: it turns blue and appears under **Selected Inputs** with its workshop-relative path. Click it again to deselect. The selection stays as you move between folders.
 3. Go to the folder where the result should go. Optionally tick **Efficient**. Choose an **Output type** and **Task**, then set the Language style (Single file) or Days and an optional Folder name (Study plan). Changing tasks keeps your selection.
 4. Click **Generate**. All selected files go to Gemini in one request, and the outputs from the table above are saved in the current folder. The first PDF opens automatically, and **Open document** / **Open output folder** reopen it.
+
+If something fails, the status line says which stage failed, what to do next, and that nothing was saved. Your selection and settings stay, so you can just click **Generate** again. LaTeX logs for compile failures are saved in `%LOCALAPPDATA%\late_night_workshop\logs\`.
 
 `Sample_pdf\` works as a ready-made workshop. Expect the Gemini request to take most of the time: with two one-page PDFs, Make schedule took about 5 minutes and a two-day daily plan about 7, while local LaTeX took about 2–3 s per PDF. `workflow.md` has the full breakdown.
 

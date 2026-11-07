@@ -46,6 +46,11 @@ def _sanitize(exc: Exception) -> GeminiError:
         return GeminiError("api_auth", "Gemini rejected the API key. Check GEMINI_API_KEY.")
     if "404" in text and "model" in low:
         return GeminiError("api_model", f"Model '{model_name()}' is not available. Set GEMINI_MODEL to an available model.")
+    if "400" in text and ("invalid_argument" in low or "too large" in low or "too complex" in low
+                          or "token" in low or "schema" in low):
+        return GeminiError("api_limit", "Gemini rejected the request as too large or too complex for the model "
+                           "(input size, output length or schema). Select fewer files or, for study plans, "
+                           "fewer days.")
     if any(s in low for s in ("timeout", "connect", "network", "503", "500")):
         return GeminiError("api_network", "Could not reach Gemini. Check your connection and retry.", retryable=True)
     return GeminiError("api_error", f"Gemini request failed ({type(exc).__name__}).", retryable=True)

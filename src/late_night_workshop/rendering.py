@@ -8,6 +8,7 @@ PDFs stay in the caller's work_dir; the publisher picks final names.
 import shutil
 import subprocess
 import time
+from datetime import date, datetime
 from pathlib import Path
 
 from . import AppError, resource_path
@@ -96,27 +97,67 @@ def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = 
     return built
 
 
-def render_bundle(bundle: dict, task: dict, work_dir, subtitle: str = "") -> list[dict]:
-    """Compile every document. With task max_pages, try compact font sizes, then raise
-    page_limit_exceeded (generation decides whether to ask Gemini to condense)."""
-    records = []
-    for d in bundle["documents"]:
-        sub = f"Day {d['day']:02d} · {subtitle}" if d.get("day") else subtitle
-        start = time.perf_counter()
-        if task.get("max_pages"):
-            for font in CHEAT_SHEET_SIZES:
-                pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"], font)
-                pages = page_count(pdf)
-                if pages <= task["max_pages"]:
-                    break
-            else:
-                raise RenderError("page_limit_exceeded",
-                                  f"The {d['document_id']} is {pages} pages at the smallest readable size; "
-                                  f"it must be {task['max_pages']}.", details=str(pages))
-        else:
-            pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"])
+def _save_diagnostic(work_dir, name: str) -> str:
+    """Copy the LaTeX log (document content only; never keys or API data) to local app data."""
+    from .workshops import app_data_dir
+    try:
+        log_dir = app_data_dir() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        target = log_dir / f"{datetime.now():%Y%m%d-%H%M%S}-{name}.log"
+        src = Path(work_dir) / f"{name}.log"
+        target.write_text(src.read_text(encoding="utf-8", errors="replace") if src.exists() else "(no log)",
+                          encoding="utf-8")
+        return str(target)
+    except OSError:
+        return ""
+
+
+def _day_subtitle(bundle: dict, day: int, subtitle: str) -> str:
+    """Daily PDFs name only that day's sources when the validated allocation lists them."""
+    ids = next((a["source_ids"] for a in bundle.get("allocation") or [] if a["day"] == day), None)
+    if ids:
+        return f"Day {day:02d} · From {', '.join(ids)} · {date.today():%Y-%m-%d}"
+    return f"Day {day:02d} · {subtitle}"
+
+
+def _render_one(d: dict, task: dict, work_dir, sub: str) -> dict:
+    start = time.perf_counter()
+    if task.get("max_pages"):
+        for font in CHEAT_SHEET_SIZES:
+            pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"], font)
             pages = page_count(pdf)
-        records.append({"document_id": d["document_id"], "role": d["role"], "day": d["day"],
-                        "temp_path": str(pdf), "page_count": pages,
-                        "seconds": round(time.perf_counter() - start, 1)})
+            if pages <= task["max_pages"]:
+                break
+        else:
+            raise RenderError("page_limit_exceeded",
+                              f"The {d['document_id']} is {pages} pages at the smallest readable size; "
+                              f"it must be {task['max_pages']}.", details=str(pages))
+    else:
+        pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"])
+        pages = page_count(pdf)
+    return {"document_id": d["document_id"], "role": d["role"], "day": d["day"],
+            "temp_path": str(pdf), "page_count": pages, "seconds": round(time.perf_counter() - start, 1)}
+
+
+def render_bundle(bundle: dict, task: dict, work_dir, subtitle: str = "", on_document=None,
+                  names: dict | None = None) -> list[dict]:
+    """Compile every document into work_dir. With task max_pages, try compact font sizes, then raise
+    page_limit_exceeded (generation decides whether to ask Gemini to condense). A compile failure
+    names the output file (names: document_id -> 'Day 02/notes.pdf') and saves the LaTeX log."""
+    records = []
+    total = len(bundle["documents"])
+    for i, d in enumerate(bundle["documents"], 1):
+        if on_document:
+            on_document(i, total, d["document_id"])
+        sub = _day_subtitle(bundle, d["day"], subtitle) if d.get("day") else subtitle
+        try:
+            records.append(_render_one(d, task, work_dir, sub))
+        except RenderError as e:
+            if e.code != "compile_failed":
+                raise
+            label = (names or {}).get(d["document_id"], f"{d['document_id']}.pdf")
+            log = _save_diagnostic(work_dir, d["document_id"])
+            raise RenderError("compile_failed", f"Couldn't compile {label} (document {i} of {total}).",
+                              "\n".join(x for x in (e.details, f"LaTeX log: {log}" if log else "") if x),
+                              retryable=True, source_id=label)
     return records

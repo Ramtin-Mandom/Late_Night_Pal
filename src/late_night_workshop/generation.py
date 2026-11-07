@@ -5,8 +5,12 @@
 
 request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient"}
 Components are passed in through `deps` so each boundary can be swapped for a stub.
-One Gemini request per Generate; a cheat sheet that overflows gets at most one
-condensation request.
+Recovery is bounded and every extra Gemini request is announced in progress:
+  - transient network failure: one automatic retry of the same request
+  - response fails validation: one schema-repair request (previous JSON + the problem, no sources)
+  - cheat sheet over one page: one condensation request
+Local compile/publish failures never trigger a Gemini call; they fail with the document named,
+and nothing is published (rendering happens in a temp dir, publishing is all-or-nothing).
 """
 
 import json
@@ -36,6 +40,15 @@ else, and use terse list items. Aim for about 60% of the current length. Keep th
 Current cheat sheet JSON:
 {bundle}"""
 
+REPAIR_PROMPT = """Your previous JSON response could not be used: {problem}.
+Return the complete corrected JSON for the same task, fixing that problem and keeping all other
+valid content. Follow the original task exactly:
+
+{task_prompt}
+
+Previous response:
+{raw}"""
+
 
 def _subtitle(sources: list[dict]) -> str:
     names = ", ".join(s["source_id"] for s in sources)
@@ -57,6 +70,33 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
             return fn(*args)
         finally:
             timings[key] = round(timings.get(key, 0) + time.perf_counter() - start, 1)
+
+    def ask_gemini(task, sources, label):
+        """One request, plus at most one visible retry for a transient network failure."""
+        try:
+            return timed("gemini_s", d["generate_content"], task, sources)
+        except gemini_client.GeminiError as e:
+            if e.code != "api_network":
+                raise
+            progress("generating", f"Network problem while {label}; retrying once...")
+            return timed("gemini_s", d["generate_content"], task, sources)
+
+    def validated(task, sources, response):
+        """Validate; on failure send one visible schema-repair request, then give up."""
+        try:
+            return validation.validate_bundle(response["raw_text"], task, sources)
+        except validation.ValidationError as e:
+            problem = e.message.split(": ", 1)[-1]
+            progress("generating", f"Gemini's response was unusable ({problem}); asking Gemini once to fix it...")
+            repair_task = dict(task, prompt=REPAIR_PROMPT.format(problem=problem, task_prompt=task["prompt"],
+                                                                 raw=(response["raw_text"] or "")[:200_000]))
+            repaired = ask_gemini(repair_task, [], "repairing the response")
+            progress("validating", "Checking the repaired response...")
+            try:
+                return validation.validate_bundle(repaired["raw_text"], task, sources)
+            except validation.ValidationError as e2:
+                e2.message += " (also after one repair attempt)"
+                raise e2
 
     try:
         tasks.validate_parameters(request.get("task_id"), request.get("parameters"))  # before any work
@@ -92,15 +132,19 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
 
         progress("generating", f"{task['label']}: sending {len(sources)} file(s) to Gemini "
                                f"({gemini_client.model_name()})...")
-        response = timed("gemini_s", d["generate_content"], task, sources)
+        response = ask_gemini(task, sources, "generating")
         progress("validating", "Checking Gemini's response...")
-        bundle = validation.validate_bundle(response["raw_text"], task, sources)
+        bundle = validated(task, sources, response)
+        names = outputs.relative_output_paths(task, bundle["documents"])
+
+        def on_document(i, n, document_id):
+            progress("rendering", f"Compiling PDF {i}/{n}: {names[document_id]}")
 
         with tempfile.TemporaryDirectory(prefix="lnp_job_") as work_dir:
             n = len(bundle["documents"])
             progress("rendering", f"Compiling {n} PDF{'s' if n > 1 else ''} locally...")
             try:
-                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle)
+                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle, on_document, names)
             except rendering.RenderError as e:
                 if e.code != "page_limit_exceeded":
                     raise
@@ -108,11 +152,11 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
                 doc = bundle["documents"][0]
                 condensed_task = dict(task, prompt=CONDENSE_PROMPT.format(
                     pages=e.details, bundle=json.dumps({"documents": [{**doc, "day": 0}], "allocation": []})))
-                response = timed("gemini_s", d["generate_content"], condensed_task, [])
-                bundle = validation.validate_bundle(response["raw_text"], task, sources)
+                response = ask_gemini(condensed_task, [], "condensing the cheat sheet")
+                bundle = validation.validate_bundle(response["raw_text"], task, sources)  # no further repair
                 progress("rendering", "Compiling condensed cheat sheet...")
-                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle)
-            progress("publishing", "Saving...")
+                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle, on_document, names)
+            progress("publishing", f"Saving {len(rendered)} PDF{'s' if len(rendered) > 1 else ''}...")
             published = timed("publish_s", d["publish"], rendered, task, checked["destination"], checked["root"])
         return {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,
                 "documents": [{"document_id": r["document_id"], "page_count": r.get("page_count"),

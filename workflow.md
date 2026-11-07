@@ -1,6 +1,6 @@
 # Application workflow
 
-Current state: M4. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
+Current state: M5. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
 Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
 
@@ -20,7 +20,7 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 ## 3. Choose a task and parameters
 
 - **Output type → Single file**: Task is Checklist, Notes, **Summary** (default), Answer key, One-page cheat sheet or Sample questions, plus **Language style** (Technical / **Standard** / Simple).
-- **Output type → Study plan**: Task is Make schedule or Make daily study plan, plus **Days** (1–30, default 2) and **Folder name** (the placeholder shows the default, `Study Schedule` or `Daily Study Plan`).
+- **Output type → Study plan**: Task is Make schedule or Make daily study plan, plus **Days** (any positive whole number, default 2) and **Folder name** (the placeholder shows the default, `Study Schedule` or `Daily Study Plan`).
 - **Efficient** (both output types, default off), with the note directly below it: "Converts files to text before sending them to Gemini. This can be much cheaper for some files, but diagrams, equations, tables, and formatting may be lost."
 - **Generate** → `ui.build_request()` snapshot (including `efficient`) → `tasks.validate_parameters()`. A bad folder name such as `bad/name` shows an error in the status line, and no job starts.
 
@@ -35,6 +35,7 @@ A `Worker` runs `generation.generate(request)` on a `QThread`; Generate is disab
 5. **Gemini client** `generate_content()` → **one** request containing both labelled PDFs. Observed: 405 s.
 6. **Validation** `validate_bundle()` → requires exactly (day 1..2) × (notes, sample-questions, checklist), different notes on each day, and an allocation covering days 1–2 that uses both sources. Any failure rejects the whole bundle, so nothing is rendered or published.
 7. **Renderer** `render_bundle()` → 6 compilations in a temp folder. Observed: 13.6 s in total, about 2 s each.
+   Daily PDFs' subtitles name that day's sources from the allocation (`Day 01 · From Lectures/topic.pdf · <date>`).
 8. **Publisher** `publish()` → builds `.lnp-staging-*` in `Revision/`, then renames it to `Daily Study Plan/` (or `Daily Study Plan (2)/` if that exists) with `Day 01/` and `Day 02/`. Observed: under 0.1 s.
 9. **Desktop UI** shows `Saved 6 PDFs in …\Daily Study Plan:` with the relative list and opens `Day 01/notes.pdf`. **Open output folder** opens `Daily Study Plan/`.
 
@@ -44,7 +45,14 @@ Other layouts:
 - **Answer key** keeps source labels such as `2(b)` and marks unclear questions `FLAGGED:`.
 - **One-page cheat sheet** compiles at 8.5 pt, then 7.5 pt. If it's still over one page, generation sends one condensation request, re-renders once, and otherwise fails with `page_limit_exceeded` and publishes nothing.
 
-Failures show `Error: <message>` and leave the selection and parameters unchanged.
+### Failures and retry (M5)
+
+Nothing is published until every document has validated and compiled, and the temp folder and any staging folder are always removed. The selection, task, Days, Folder name, style and Efficient setting stay as they were, and Generate is enabled again.
+
+- **Malformed response** (for example, day 2's checklist missing): the status shows `Gemini: Gemini's response was unusable (missing checklist for day 2); asking Gemini once to fix it...`. If the repair is also incomplete, it ends with `Checking the request or Gemini's response failed: … (also after one repair attempt)`, then `Nothing was saved…` and `Click Generate to try again…`. That's two Gemini calls in total; no compile runs, and nothing is written.
+- **LaTeX failure partway** (document 5 of 6): the status counts through `Rendering: Compiling PDF 5/6: Day 02/sample-questions.pdf`, then shows `Local PDF compilation failed: Couldn't compile Day 02/sample-questions.pdf (document 5 of 6).` and the LaTeX log path in `%LOCALAPPDATA%\late_night_workshop\logs\`. There is one Gemini call and no repair call. The four PDFs that had already compiled were only in the temp folder, so nothing appears in `Revision/`.
+- **Retry** from the same window: the full bundle lands in the next free folder, for example `Daily Study Plan (2)/` with all six PDFs, while an existing `Daily Study Plan/` stays byte-for-byte unchanged.
+- **Network error:** one automatic retry, shown as `Network problem while generating; retrying once...`. Quota, auth and size-limit errors aren't retried; they show what to fix (for example `Wait a minute, then click Generate again.`).
 
 ## 5. Efficient, mixed formats and scans
 
