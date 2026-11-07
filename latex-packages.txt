@@ -1,0 +1,131 @@
+LaTeX packages installed for math and science notes
+====================================================
+
+Installed on 2026-11-07 on the development machine (Windows 10, MiKTeX 25.12,
+user install at %LOCALAPPDATA%\Programs\MiKTeX), with
+    miktex packages install --package-id-file=<list>
+from the default MiKTeX package repository. 89 packages were installed (no extra
+dependencies were pulled in). Installed packages went from 230 to 319.
+
+Important for Late Night Pal
+  - The app's templates (templates/document.tex, templates/cheat-sheet.tex) only use
+    fontspec, geometry, enumitem, parskip and multicol. Gemini's output is escaped
+    plain text, so the generated PDFs do not use these packages, and they look exactly
+    as before. The packages only matter if a template is changed to load them.
+  - Another PC does not get these from the ZIP. Install them there with the command
+    at the end of this file.
+
+Verified
+  - One lualatex test document loading all of the packages below (except nicematrix)
+    compiled, with physics/braket/cancel/mathrsfs/dsfont math, siunitx units, mhchem
+    and chemformula reactions, a chemfig molecule, a pgfplots plot, tikz-cd,
+    circuitikz, tcolorbox and booktabs.
+  - The app's own templates still compile (renderer edge-case check).
+
+Known limitations
+  - nicematrix 7.12 is installed but does not load: it needs LaTeX 2026-06-01 and this
+    MiKTeX has LaTeX2e 2025-11-01. A full MiKTeX update (MiKTeX Console > Updates, or
+    "miktex packages update") would fix it but also changes the LaTeX setup the demo
+    was verified on. Not done.
+  - physics and siunitx both define \qty. If you load both, use \SI{...}{...} for units.
+  - lm-math, stix2-otf, xits, tex-gyre-math, firamath and libertinus-fonts are OpenType
+    maths fonts for unicode-math (\setmathfont{Latin Modern Math} etc.). The font index
+    was refreshed with "luaotfload-tool --update" after installing.
+
+Already installed before (not changed)
+  amsmath amsfonts amscls mathtools pgf pgfplots booktabs multirow graphics xcolor tcolorbox environ trimspaces pdfcol tikzfill listings listingsutf8 hyperref cleveref enumitem geometry fancyhdr titlesec microtype parskip etoolbox fontspec luaotfload
+
+Newly installed (MiKTeX package id, title)
+  adjustbox          Graphics package-alike macros for “general” boxes
+  algorithm2e        Floating algorithm environment with algorithmic keywords
+  algorithmicx       The algorithmic style you always wanted!
+  algorithms         A suite of tools for typesetting algorithms in pseudo-code
+  algpseudocodex     Package for typesetting pseudocode
+  arydshln           Draw dash-lines in array/tabular
+  bbm                "Blackboard-style" cm fonts
+  bigints            Writing big integrals
+  bohr               Simple atom representation according to the Bohr model
+  braket             Dirac bra-ket and set notations
+  breqn              Automatic line breaking of displayed equations
+  cancel             Place lines through maths formulae
+  caption            Customising captions in floating environments
+  cases              Numbered cases environment
+  chemfig            Draw molecules with easy syntax
+  chemformula        Command for typesetting chemical formulas and reactions
+  chemgreek          Upright Greek letters in chemistry
+  chemmacros         A collection of macros to support typesetting chemistry documents
+  chemnum            A method for numbering chemical compounds
+  chemplants         Symbology to draw chemical plants with TikZ
+  circuitikz         Draw electrical networks with TikZ
+  collectbox         Collect and process macro arguments as boxes
+  colortbl           Add colour to LaTeX tables
+  commath            Mathematics support
+  csquotes           Context sensitive quotation facilities
+  delimset           Typeset and declare sets of delimiters with convenient size control
+  derivative         Nice and easy derivatives
+  diagbox            Table heads with diagonal lines
+  diffcoeff          Write differential coefficients easily and consistently
+  doublestroke       Typeset mathematical double stroke symbols
+  elements           Provides properties of chemical elements
+  esint              Extended set of integrals for Computer Modern
+  feynmp-auto        Automatic processing of feynmp graphics
+  firamath           Fira sans serif font with Unicode math support
+  float              Improved interface for floating objects
+  fontawesome5       Font Awesome 5 with LaTeX support
+  forest             Drawing (linguistic) trees
+  fourier            Using Utopia fonts in LaTeX documents
+  fp                 Fixed point arithmetic
+  framed             Framed or shaded regions that can break across pages
+  gensymb            Generic symbols for both text and math mode
+  interval           Format mathematical intervals, ensuring proper spacing
+  jknappen           Miscellaneous packages by Joerg Knappen
+  karnaugh-map       LaTeX package for drawing karnaugh maps with up to 6 variables
+  libertinus-fonts   The Libertinus font family
+  lm-math            OpenType maths fonts for Latin Modern
+  makecell           Tabular column heads and multilined cells
+  marvosym           Martin Vogel's Symbols (marvosym) font
+  mathalpha          General package for loading maths alphabets in LaTeX
+  mathdots           Commands to produce dots in math that respect font size
+  mdframed           Framed environments that can split at page boundaries
+  mhchem             Typeset chemical formulae/equations and H and P statements
+  mleftright         Variants of delimiters that act as maths open/close
+  modiagram          Drawing molecular orbital diagrams
+  ncctools           A collection of general packages for LaTeX
+  newtx              Alternative uses of the TX fonts, with improved metrics
+  nicematrix         Improve the typesetting of matrices and tabulars with PGF
+  ntheorem           Enhanced theorem environment
+  pgf-blur           PGF/TikZ package for "blurred" shadows
+  physics            Macros supporting the Mathematics of Physics
+  psnfss             Font support for common PostScript fonts
+  pst-optic          Drawing optics diagrams
+  rsfso              A mathematical calligraphic font based on rsfs
+  siunitx            A comprehensive (SI) units package
+  spreadtab          Spreadsheet features for LaTeX tabular environments
+  steinmetz          Print Steinmetz notation
+  stix2-otf          OpenType Unicode text and maths fonts
+  stmaryrd           St Mary Road symbols for theoretical computer science
+  tensor             Typeset tensors
+  tex-gyre-math      Maths fonts to match tex-gyre text fonts
+  textgreek          Upright greek letters in text
+  thmtools           Extensions to theorem environments
+  threeparttable     Tables with captions and notes all the same width
+  tikz-3dplot        Coordinate transformation styles for 3d plotting in TikZ
+  tikz-cd            Create commutative diagrams with TikZ
+  tikz-feynman       Feynman diagrams with TikZ
+  tikzlings          A collection of cute little animals and similar creatures
+  tikzpeople         Draw people-shaped nodes in TikZ
+  tkz-base           Tools for drawing with a cartesian coordinate system
+  tkz-euclide        Tools for drawing Euclidean geometry
+  unicode-math       Unicode mathematics support for XeTeX and LuaTeX
+  units              Typeset units
+  was                A collection of small packages by Walter Schmidt
+  wasysym            LaTeX support file to use the wasy fonts
+  wrapfig            Produces figures which text can flow around
+  xfrac              Split-level fractions
+  xits               A Scientific Times-like font with support for mathematical typesetting
+  xlop               Calculates and displays arithmetic operations
+  xstring            String manipulation for (La)TeX
+
+Install the same set on another PC (PowerShell, MiKTeX installed and on PATH)
+  foreach ($p in "adjustbox algorithm2e algorithmicx algorithms algpseudocodex arydshln bbm bigints bohr braket breqn cancel caption cases chemfig chemformula chemgreek chemmacros chemnum chemplants circuitikz collectbox colortbl commath csquotes delimset derivative diagbox diffcoeff doublestroke elements esint feynmp-auto firamath float fontawesome5 forest fourier fp framed gensymb interval jknappen karnaugh-map libertinus-fonts lm-math makecell marvosym mathalpha mathdots mdframed mhchem mleftright modiagram ncctools newtx nicematrix ntheorem pgf-blur physics psnfss pst-optic rsfso siunitx spreadtab steinmetz stix2-otf stmaryrd tensor tex-gyre-math textgreek thmtools threeparttable tikz-3dplot tikz-cd tikz-feynman tikzlings tikzpeople tkz-base tkz-euclide unicode-math units was wasysym wrapfig xfrac xits xlop xstring".Split(" ")) { miktex packages install $p }
+  luaotfload-tool --update
