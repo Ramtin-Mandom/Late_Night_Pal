@@ -50,7 +50,7 @@ def run_app() -> int:
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle("Late Night Workshop")
+            self.setWindowTitle("Late Night Pal")
             self.pdf = None
             self.result = None
             self.thread = None

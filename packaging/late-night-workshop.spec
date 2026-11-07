@@ -14,5 +14,5 @@ a = Analysis(
     hiddenimports=["late_night_workshop.ui", "late_night_workshop.gemini_client", "late_night_workshop.rendering"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="late-night-workshop", console=True)
-coll = COLLECT(exe, a.binaries, a.datas, name="late-night-workshop")
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Late Night Pal", console=True)
+coll = COLLECT(exe, a.binaries, a.datas, name="Late Night Pal")

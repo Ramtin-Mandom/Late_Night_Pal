@@ -1,4 +1,4 @@
-"""Late Night Workshop desktop study sidekick."""
+"""Late Night Pal desktop study sidekick."""
 
 import sys
 from pathlib import Path

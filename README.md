@@ -1,4 +1,4 @@
-# Late Night Workshop
+# Late Night Pal
 
 A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Gemini. **Current state (M1):** pick one PDF, get a Gemini summary compiled to PDF with local LaTeX, and open it.
 
@@ -46,7 +46,7 @@ Headless checks:
 
 ```powershell
 .venv\Scripts\python -m PyInstaller packaging\late-night-workshop.spec --noconfirm
-dist\late-night-workshop\late-night-workshop.exe --check
+& "dist\Late Night Pal\Late Night Pal.exe" --check
 ```
 
 The executable doesn't include the API key. Run it from a folder that has a `.env`, or set `GEMINI_API_KEY`. LaTeX must be installed on the machine.
