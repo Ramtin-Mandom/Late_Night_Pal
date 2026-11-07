@@ -61,6 +61,25 @@ Headless checks:
 .venv\Scripts\python -m late_night_workshop --summarize Sample_pdf\Note_1.pdf  # one real API call -> Sample_pdf\summary.pdf
 ```
 
+## Demo sequence (rehearsed 2026-11-07)
+
+The demo workshop is `demo\Biology Demo Workshop\`:
+
+- `Lectures\photosynthesis-lecture.pdf` is a text PDF about photosynthesis.
+- `Labs\osmosis-lab-scan.pdf` is an image-only scanned osmosis lab. Its unique fact is that potato strips in **0.8 M sucrose lost 14% of their mass**, and the cells are isotonic with about 0.4 M sucrose.
+- `Revision\` is empty, ready for output.
+
+1. Launch with `.venv\Scripts\python -m late_night_workshop`. Click **Open Workshop** and choose `demo\Biology Demo Workshop` (after the first time, click it under **Recent Workshops**).
+2. Click `[folder] Lectures` → `photosynthesis-lecture.pdf`, **Up**, `[folder] Labs` → `osmosis-lab-scan.pdf`, **Up**, `[folder] Revision`. **Selected Inputs** shows both relative paths.
+3. Choose **Output type: Study plan**, **Task: Make daily study plan**, **Days: 2**, leave **Folder name** empty, and tick **Efficient**. Click **Generate**.
+4. A dialog says `Labs/osmosis-lab-scan.pdf (page 1) has little or no extractable text…`. Click **Process original**.
+5. While Gemini works (1–2 min in the rehearsal; earlier runs took up to 7 min), open the **previously generated example**: `demo\Previously generated example\Daily Study Plan (rehearsal 2026-11-07)\`. The best single PDF is `Day 01
+otes.pdf`: it was built from the scan and states the 0.8 M → −14% result. Its subtitle reads `From Labs/osmosis-lab-scan.pdf`.
+6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, `Day 01
+otes.pdf` opens automatically. Use **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`. A second run lands in `Daily Study Plan (2)` and leaves the first untouched.
+
+Before the next rehearsal, delete `demo\Biology Demo Workshop\Revision\Daily Study Plan*` so the first run gets the plain folder name.
+
 ## Packaging probe (full packaging is M7)
 
 ```powershell

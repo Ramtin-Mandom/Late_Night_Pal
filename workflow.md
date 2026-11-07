@@ -1,6 +1,6 @@
 # Application workflow
 
-Current state: M5. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
+Current state: M6 (rehearsed with `demo/Biology Demo Workshop`; see the README demo sequence). Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
 Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
 
@@ -60,7 +60,7 @@ Example selection: `Lectures/topic.pdf` (2 text pages), `Readings/topic.pdf`, `S
 
 - **Efficient off:** both PDFs go as originals (`Source 1: Lectures/topic.pdf` + document item, `Source 2: Readings/topic.pdf` + document item). Gemini isn't configured to take PPTX originals, so `deck.pptx` goes as attributed text, and the status line says `Slides/deck.pptx was converted to text locally …`.
 - **Efficient on:** `converters.convert()` extracts each file (cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`, keyed by content hash and converter version). The request carries one text item per file: `Source 1: Lectures/topic.pdf (text extracted locally …)`, `[Lectures/topic.pdf - page 1] …`, `[Lectures/topic.pdf - page 2] …`, `[end of Lectures/topic.pdf]`, then `Readings/topic.pdf`, then `[Slides/deck.pptx - slide N]`. The two `topic.pdf` files stay distinct by source ID.
-- **Scan:** with Efficient on, `Scans/scan.pdf` (image only) extracts to nearly no text, so preparation returns a `needs_original` decision for page 1. The worker emits `decision_needed` and waits; the UI thread shows "`Scans/scan.pdf` (pages 1) has little or no extractable text…" with **Process original** / **Cancel**.
+- **Scan:** with Efficient on, `Scans/scan.pdf` (image only) extracts to nearly no text, so preparation returns a `needs_original` decision for page 1. The worker emits `decision_needed` and waits; the UI thread shows "`Scans/scan.pdf` (page 1) has little or no extractable text…" with **Process original** / **Cancel**.
   - **Process original:** preparation reruns with `original_overrides={"Scans/scan.pdf"}`. Only that file is sent as a document item; `Lectures/topic.pdf` stays text, in the same single request.
   - **Cancel:** `generate()` returns `cancelled` before any API call, so nothing is written. The status reads "Cancelled. Nothing was sent to Gemini or saved.", the selection stays, and Generate is enabled again.
 - **Unusable files** fail before Gemini with the file named: a corrupt DOCX (`Could not read text from broken.docx`), or an empty PPTX or an image with no supported original (`… Export it as a text-based PDF, DOCX or TXT …`).
@@ -71,8 +71,9 @@ Example selection: `Lectures/topic.pdf` (2 text pages), `Readings/topic.pdf`, `S
 | --- | --- | --- | --- | --- |
 | Make schedule (3 PDFs) | 290.3 s | 7.9 s | <0.1 s | 298 s |
 | Make daily study plan, 2 days (6 PDFs) | 405.1 s | 13.6 s | <0.1 s | 419 s |
+| M6 rehearsal: daily plan, 2 days, Efficient on, text PDF + scan sent as original | ≈101 s | ≈13.4 s | <0.1 s | 116 s |
 
-The Gemini request dominates. Local compilation is about 2–3 s per PDF.
+The Gemini request dominates, and its latency varies a lot between runs. Local compilation is about 2–3 s per PDF.
 
 ## Headless
 
