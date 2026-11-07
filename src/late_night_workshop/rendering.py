@@ -14,7 +14,8 @@ from pathlib import Path
 from . import AppError, resource_path
 
 COMPILERS = ("lualatex",)  # templates use fontspec + luaotfload fallback fonts for Unicode text
-COMPILE_TIMEOUT_S = 180
+COMPILE_TIMEOUT_S = 180  # per pass
+COMPILE_PASSES = 2  # every document is compiled twice so contents, references and page totals settle
 # Cheat-sheet sizes (pt, leading) tried in order; 7.5pt is the readable minimum.
 CHEAT_SHEET_SIZES = ((8.5, 10), (7.5, 8.8))
 
@@ -89,17 +90,22 @@ def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = 
               .replace("<<BODY>>", blocks_to_latex(document.get("blocks", []), compact=template == "cheat-sheet")))
     work_dir = Path(work_dir)
     (work_dir / f"{name}.tex").write_text(tex, encoding="utf-8")
-    try:
-        proc = subprocess.run(
-            [compiler, "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape", f"{name}.tex"],
-            cwd=work_dir, capture_output=True, text=True, errors="replace", timeout=COMPILE_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        raise RenderError("compile_failed", f"LaTeX compilation of {name} timed out.", retryable=True)
     built = work_dir / f"{name}.pdf"
-    if proc.returncode != 0 or not built.exists():
-        errors = [l for l in proc.stdout.splitlines() if l.startswith("!")][:5]
-        raise RenderError("compile_failed", f"Could not compile the {name} PDF.", "\n".join(errors))
+    for _ in range(COMPILE_PASSES):  # the second pass resolves references written to .aux by the first
+        try:
+            proc = subprocess.run(
+                [compiler, "-interaction=nonstopmode", "-halt-on-error", "-no-shell-escape", f"{name}.tex"],
+                cwd=work_dir, capture_output=True, text=True, errors="replace", timeout=COMPILE_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            raise RenderError("compile_failed", f"LaTeX compilation of {name} timed out.", retryable=True)
+        if proc.returncode != 0 or not built.exists():
+            # leave the .log in place: render_bundle copies it to the diagnostics folder
+            errors = [l for l in proc.stdout.splitlines() if l.startswith("!")][:5]
+            raise RenderError("compile_failed", f"Could not compile the {name} PDF.", "\n".join(errors))
+    for extra in work_dir.glob(f"{name}.*"):  # .tex, .aux, .log, .out, .toc, ...: only the PDF stays
+        if extra != built:
+            extra.unlink(missing_ok=True)
     return built
 
 
