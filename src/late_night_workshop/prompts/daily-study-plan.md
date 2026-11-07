@@ -1,9 +1,9 @@
-Task: split the attached source(s) into a daily study plan of exactly {days} day(s). Each day gets its own three documents.
+Create a study plan of exactly {days} day(s). Return one allocation entry per day numbered 1 through {days}, with topics, workload_minutes (estimated total study time), and source_ids (exact source labels). Use every source on at least one day. Order topics by prerequisite and balance effort across reading, working examples, and practice. When days exceed the number of topics, give later days specific review goals and fresh applications of earlier material.
 
-- First decide the allocation: distinct topics per day, ordered so earlier days build foundations, with balanced workload. Do not repeat the same material every day; with more days than material, later days may be review and practice of earlier topics, but each day's documents must still differ.
-- Return `allocation`: one entry per day 1..{days} with its `topics`, estimated `workload_minutes`, and the `source_ids` (exact source labels) it draws on. Every source must appear on at least one day.
-- For EACH day N, return three documents with `day` = N:
-  - role `notes`: study notes covering only that day's topics.
-  - role `sample-questions`: practice questions on exactly the material in that day's notes, as `question` blocks labelled `Q1`, `Q2`, ..., then a heading `Answers` followed by one `question` block per answer whose `label` repeats the question's label (`Q1`, `Q2`, ...) and whose `text` is a short model answer.
-  - role `checklist`: what the student should know by the end of that day, matching that day's notes.
-- Start each document's title with `Day N:` followed by the day's topic.
+For each day N, return exactly three documents in the order below. Set day to N on all three. Start every title with the literal prefix Day N: using the actual number, followed by the day's topic. Keep each day's content aligned with its allocation and feasible within its time estimate.
+
+1. notes: Teach the day's topics in descriptive prose with short headings. Identify the relevant source labels. Explain the central idea and why it works, define unfamiliar symbols, and show the critical steps of the method or argument. Work through a representative example for a difficult idea. Clearly identify any hypothetical inputs. On review days, focus on the allocated comparison, application, or synthesis.
+2. sample-questions: Test only what the day's notes teach. Give enough information to attempt each question. Use question blocks labelled Q1, Q2, and so on, restarting each day. After all questions for that day, add a heading with the exact text Answers, then a question block for each answer in order with its original label and a short model solution.
+3. checklist: Use list blocks of observable actions matched to the day's objectives. A student should be able to use the questions or notes to check each item.
+
+Before returning, verify that every day has all three roles, every question has one matching answer, and each assessed skill was explained in that day's notes.

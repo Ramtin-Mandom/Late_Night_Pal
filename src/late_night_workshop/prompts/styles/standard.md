@@ -1,1 +1,1 @@
-Language style: Standard. Use clear, student-level explanations. Introduce technical terms with a short definition the first time they appear.
+Write for a student taking the course. Use clear, descriptive prose and introduce each new technical term or symbol with a brief definition. In explanations and worked examples, connect the steps with reasons. Assume familiarity with terms once introduced. Keep reference sheets, checklists, and short answers as compact as their task requires.

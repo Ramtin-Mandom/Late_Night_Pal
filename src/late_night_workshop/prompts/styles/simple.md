@@ -1,1 +1,1 @@
-Language style: Simple. Use plain, everyday words and short sentences. Explain every technical term simply, but do not drop any essential concept, formula, or fact.
+Use plain, everyday language and short sentences. Introduce the idea in familiar words, then give its technical name so the student can recognize it in class. Explain unfamiliar symbols as they appear. Keep essential formulas, conditions, and reasoning intact. In a worked example, explain the step a beginner is most likely to miss. Match the length and structure of the requested task.

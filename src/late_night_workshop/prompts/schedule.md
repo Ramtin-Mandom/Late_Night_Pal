@@ -1,7 +1,7 @@
-Task: plan a study schedule of exactly {days} day(s) for the attached source(s), and return exactly three documents.
+Build a study schedule of exactly {days} day(s). Return an allocation entry for every day from 1 through {days}, with topics, workload_minutes (estimated total study time), and source_ids (exact source labels). Use every source at least once. Assign prerequisites before dependent work. Estimate effort from the actual activities: a short proof or lab analysis can take longer than several pages of reading. For extra days, use targeted retrieval, comparison, and mixed practice on earlier material.
 
-1. Role `schedule`: for each day 1..{days}, a heading that starts with exactly `Day N` (for example `Day 1: Cell structure`), followed by a list of what to study that day, which source(s) to use, and an estimated time.
-2. Role `file-guide`: a guide to every attached source. For each source, a heading that is its exact label (for example `Lectures/topic.pdf`), then a short paragraph on what it contains and a list of the days it is used.
-3. Role `checklist`: what the student should know or be able to do by the end of the schedule, as checkable statements grouped by topic.
+Use that same allocation to produce exactly three whole-schedule documents, in this order, each with day set to 0.
 
-Also return `allocation`: one entry per day 1..{days} with that day's topics, estimated `workload_minutes`, and the `source_ids` (exact source labels) it uses. Every source must appear on at least one day. Balance the workload; with more days than material, use review and practice days rather than inventing content.
+1. schedule: For each day, use a heading starting with Day N, for example Day 1: Cell structure. Follow it with a list of concrete study actions, the exact sources to use, and estimated minutes. Make each day's times add up to its workload_minutes. Include an observable finish point, such as solving a particular type of problem unaided.
+2. file-guide: Use each exact source label as a heading. Follow it with a short paragraph on the file's contents and purpose, then a list of the day numbers on which the allocation uses it. Identify any limits on legibility.
+3. checklist: Group the schedule's outcomes by topic. Start each list item with a verb and identify what the student should be able to do by the end.

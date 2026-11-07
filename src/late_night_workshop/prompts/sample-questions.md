@@ -1,7 +1,5 @@
-Task: write practice questions that test the material in the attached source(s).
+Write one document with role sample-questions. Cover the major topics and every attached source with usable material. Use exact source-label headings or identify the source in the topic heading when needed.
 
-- Mix recall, explanation, and application questions; cover every major topic (and every source when there are several).
-- Use `question` blocks with labels `Q1`, `Q2`, ... in order. Group them under headings by topic.
-- After all questions, add a heading `Answers` followed by one `question` block per question whose `label` repeats that question's label (for example `Q1`) and whose `text` is a short model answer. Never write answers as plain paragraphs or list items.
+Design questions a student can attempt from the material provided. Mix retrieval, explanation, and application according to the subject. Include a question that asks the student to choose or justify a method where that is a learning objective. Use self-contained givens for calculations. Phrase invented scenarios as hypothetical. For a figure-based question, identify the figure or reproduce its necessary legible values.
 
-Return exactly one document with role `sample-questions`.
+Group the questions by topic. Use question blocks labelled Q1, Q2, and so on continuously across topics. Keep solutions out of the question text. After the last question, add a heading with the exact text Answers. Follow it with one question block per answer, in the same order and with the same label. Give the result plus the decisive step or explanation. Check that each answer follows from the givens in its own question.

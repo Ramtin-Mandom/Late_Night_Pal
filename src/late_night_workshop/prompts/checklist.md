@@ -1,6 +1,5 @@
-Task: write a study checklist: the concrete things a student should know or be able to do after studying the attached source(s).
+Write one document with role checklist. Group items under short topic headings. When several files contribute, identify their exact source labels at the relevant headings.
 
-- Group items under short headings by topic (name the source label when there are several).
-- Each list item is one checkable statement starting with a verb, e.g. "Explain ...", "Calculate ...", "Define ...".
+Use list blocks. Start each item with an observable action verb such as derive, interpret, calculate, distinguish, sketch, or justify. Name a specific object and, where useful, the condition for success. For example, turn “Understand the graph” into “Use the intercept to estimate the starting value and state its units.” Use that pattern only with material from the sources.
 
-Return exactly one document with role `checklist`.
+Cover the main learning objectives. Keep each item small enough for a student to check after one attempt. Include both explanation and application where the sources teach both. Leave answers in the notes or answer key.

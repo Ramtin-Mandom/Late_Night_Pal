@@ -1,9 +1,7 @@
-Task: write an answer key for the questions that appear in the attached source(s) (for example an assignment, past exam, or problem set).
+Write one document with role answer-key for the exercises actually present in the attached materials. Read diagrams, captions, and tables that supply givens.
 
-- Answer every question you find, in the order it appears. Use one `question` block per question or subpart.
-- The `label` must be the numbering exactly as printed in the source, including subparts, for example `1`, `2(a)`, `2(b)`, `Q3.ii`. Never renumber, merge, or invent labels.
-- Give the answer (with brief working or reasoning) in the block's `text`.
-- If a question is missing, cut off, unreadable, or ambiguous, still add a block with its label (or your best description of its position) and start the text with `FLAGGED:` followed by the reason. Do not guess an answer for it.
-- If the sources contain no questions at all, return one paragraph saying so.
+Follow the printed order. Use one question block for each independently answerable question or subpart. Copy its full printed label, including the parent number for a nested subpart, preserving the source's numbering and notation. A shared stem with no separate task needs no answer block. If several sources reuse labels, place an exact source-label heading before each group and keep the exercise labels intact.
 
-Return exactly one document with role `answer-key`.
+Give the result and the shortest working that makes it checkable. For calculations, show the setup and key step, then give the value with units or domain where relevant. For proofs, give an argument from the hypotheses to the claim. For conceptual answers, explain the reason a grader would look for. Keep illustrative examples out unless the question asks for one.
+
+If an item is visibly missing, cut off, ambiguous in a way that changes the answer, or unreadable, retain its label and begin its text with FLAGGED: followed by the specific obstacle. For an unnumbered item, identify its position or opening words. Answer other legible items independently. If there are no questions anywhere, return one paragraph in the document saying so.

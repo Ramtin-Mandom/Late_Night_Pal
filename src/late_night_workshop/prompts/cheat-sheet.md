@@ -1,7 +1,5 @@
-Task: write a one-page cheat sheet for the attached source(s): the densest useful reference a student could bring into an exam.
+Write one document with role cheat-sheet designed for a single printed page in small type. Aim for at most 350–450 words. Use fewer words when equations or headings occupy substantial space.
 
-- It must fit on ONE printed page in a small font. Aim for roughly 350-450 words in total. Prefer terse list items over paragraphs.
-- Prioritize definitions, formulas, key facts, and distinctions that are easy to confuse. Leave out introductions and examples.
-- Use short headings per topic.
+Use short topic headings and compact list items. Prioritize information a student would look up mid-problem: a formula with its applicability condition, the meaning of an easy-to-misread symbol, a decision rule, or the distinction between two similar cases. For a procedure, give a short sequence a reader can follow at a glance. For descriptive subjects, favor defining features and relationships.
 
-Return exactly one document with role `cheat-sheet`.
+Skip introductions, worked examples, repeated definitions, and lengthy reasoning. If space is tight, cut lower-priority facts before cutting units, exceptions, or conditions essential to correct use.
