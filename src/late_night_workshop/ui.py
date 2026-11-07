@@ -383,7 +383,8 @@ def run_app() -> int:
         def choose_for(self, decision) -> str:
             """Dialog for one scan / no-text file; returns 'process_original' or 'cancel'."""
             kind = decision.get("unit_kind", "page")
-            where = (f" ({kind}s {', '.join(map(str, decision['units']))})" if decision["units"] else "")
+            units = decision["units"]
+            where = (f" ({kind}{'s' if len(units) > 1 else ''} {', '.join(map(str, units))})" if units else "")
             box = QMessageBox(QMessageBox.Question, "Little text found",
                               f"{decision['source_id']}{where} has little or no extractable text. It may be a scan.\n\n"
                               "Process original sends this file itself to Gemini (other files stay as text). "

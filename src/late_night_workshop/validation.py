@@ -49,6 +49,22 @@ def _clean_blocks(blocks, where: str) -> list[dict]:
     return clean
 
 
+def _label_answers(blocks: list[dict]) -> list[dict]:
+    """Sample questions: if the 'Answers' section came back as unlabelled paragraphs/list items and
+    their count matches the questions, give each answer its question's label (Q1, Q2, ...)."""
+    idx = next((i for i, b in enumerate(blocks) if b["kind"] == "heading" and b["text"].lower().startswith("answer")), None)
+    if idx is None:
+        return blocks
+    labels = [b["label"] for b in blocks[:idx] if b["kind"] == "question"]
+    tail = blocks[idx + 1:]
+    if not labels or any(b["kind"] in ("question", "heading") for b in tail):
+        return blocks
+    answers = [x for b in tail for x in (b["items"] if b["kind"] == "list" else [b["text"]])]
+    if len(answers) != len(labels):
+        return blocks
+    return blocks[:idx + 1] + [{"kind": "question", "label": l, "text": a} for l, a in zip(labels, answers)]
+
+
 def _doc_text(doc: dict) -> str:
     parts = []
     for b in doc["blocks"]:
@@ -97,8 +113,10 @@ def validate_bundle(raw_text: str, task: dict, sources: list[dict]) -> dict:
         day = raw.get("day") if isinstance(raw.get("day"), int) and not isinstance(raw.get("day"), bool) else None
         where = f"{role} (day {day})" if kind == "daily" else str(role)
         title = raw.get("title").strip() if isinstance(raw.get("title"), str) and raw["title"].strip() else task["label"]
-        docs.append({"role": role, "day": day if kind == "daily" else None, "title": title,
-                     "blocks": _clean_blocks(raw.get("blocks"), where)})
+        blocks = _clean_blocks(raw.get("blocks"), where)
+        if role == "sample-questions":
+            blocks = _label_answers(blocks)
+        docs.append({"role": role, "day": day if kind == "daily" else None, "title": title, "blocks": blocks})
 
     if kind == "daily":
         want = {(d, r) for d in expected["days"] for r in expected["roles_per_day"]}
