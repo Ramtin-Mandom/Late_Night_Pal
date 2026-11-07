@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "late-night-workshop"
+version = "0.1.0"
+description = "Desktop study sidekick: turn study PDFs into locally compiled study PDFs with Gemini."
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "google-genai>=3.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.0"]
+
+[project.scripts]
+late-night-workshop = "late_night_workshop.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+late_night_workshop = ["prompts/*.md", "templates/*.tex"]

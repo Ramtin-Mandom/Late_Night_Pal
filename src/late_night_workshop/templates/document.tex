@@ -1,0 +1,17 @@
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+% Greek, arrows and math symbols from source PDFs fall back to Windows fonts.
+\directlua{luaotfload.add_fallback("lnwfallback", {"Cambria:mode=node;", "Segoe UI Symbol:mode=node;"})}
+\setmainfont{Latin Modern Roman}[RawFeature={fallback=lnwfallback}]
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumitem}
+\usepackage{parskip}
+\setlist{nosep, leftmargin=1.5em}
+\pagestyle{plain}
+\title{<<TITLE>>}
+\date{<<SUBTITLE>>}
+\author{}
+\begin{document}
+\maketitle
+<<BODY>>
+\end{document}

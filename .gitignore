@@ -5,3 +5,10 @@
 
 # Personal Claude Code settings
 .claude/settings.local.json
+
+# Python / build output
+.venv/
+__pycache__/
+*.egg-info/
+build/
+dist/
