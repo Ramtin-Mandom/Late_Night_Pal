@@ -6,7 +6,7 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 
 from pathlib import Path
 
-from . import generation, workshops
+from . import generation, tasks, workshops
 
 SELECTED_BG = "#2563eb"  # blue highlight for selected files
 SELECTED_FG = "#ffffff"
@@ -27,9 +27,9 @@ def build_request(state: dict, task_id: str = "summary", parameters: dict | None
 def run_app() -> int:
     from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
     from PySide6.QtGui import QBrush, QColor, QDesktopServices
-    from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+    from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
-                                   QStackedWidget, QVBoxLayout, QWidget)
+                                   QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
     PATH_ROLE = Qt.UserRole
 
@@ -56,6 +56,7 @@ def run_app() -> int:
             self.thread = None
             self.worker = None
             self.last_paths = []
+            self.last_output_root = None
             self.stack = QStackedWidget()
             self.stack.addWidget(self._start_page())
             self.stack.addWidget(self._workshop_page())
@@ -173,12 +174,30 @@ def run_app() -> int:
             right.addWidget(self.selected_list)
             right.addWidget(QLabel("Output type"))
             self.output_type = QComboBox()
-            self.output_type.addItem("Single file")
+            self.output_type.addItems([tasks.STUDY_PLAN, tasks.SINGLE_FILE])
             right.addWidget(self.output_type)
             right.addWidget(QLabel("Task"))
             self.task_box = QComboBox()
-            self.task_box.addItem("Summary", "summary")
             right.addWidget(self.task_box)
+            # Single file parameter
+            self.style_lbl = QLabel("Language style")
+            self.style_box = QComboBox()
+            self.style_box.addItems(list(tasks.STYLES))
+            self.style_box.setCurrentText(tasks.DEFAULT_STYLE)
+            # Study plan parameters
+            self.days_lbl = QLabel("Days")
+            self.days_box = QSpinBox()
+            self.days_box.setRange(1, tasks.MAX_DAYS)
+            self.days_box.setValue(2)
+            self.folder_lbl_param = QLabel("Folder name (optional)")
+            self.folder_edit = QLineEdit()
+            for w in (self.style_lbl, self.style_box, self.days_lbl, self.days_box, self.folder_lbl_param,
+                      self.folder_edit):
+                right.addWidget(w)
+            self.output_type.currentTextChanged.connect(self.output_type_changed)
+            self.task_box.currentIndexChanged.connect(self.task_changed)
+            self.output_type.setCurrentText(tasks.SINGLE_FILE)
+            self.output_type_changed(tasks.SINGLE_FILE)
             self.generate_btn = QPushButton("Generate")
             self.generate_btn.clicked.connect(self.generate)
             right.addWidget(self.generate_btn)
@@ -197,6 +216,33 @@ def run_app() -> int:
             body.addLayout(right, 2)
             lay.addLayout(body)
             return page
+
+        def output_type_changed(self, output_type):
+            self.task_box.blockSignals(True)
+            self.task_box.clear()
+            for task_id, label in tasks.tasks_for(output_type):
+                self.task_box.addItem(label, task_id)
+            self.task_box.blockSignals(False)
+            if output_type == tasks.SINGLE_FILE:
+                self.task_box.setCurrentIndex(self.task_box.findData("summary"))
+            self.task_changed()
+
+        def task_changed(self, *_):
+            """Show the current task's parameters; selection is untouched (it lives in workshop state)."""
+            task_id = self.task_box.currentData()
+            plan = tasks.TASKS.get(task_id, {}).get("output_type") == tasks.STUDY_PLAN
+            for w in (self.style_lbl, self.style_box):
+                w.setVisible(not plan)
+            for w in (self.days_lbl, self.days_box, self.folder_lbl_param, self.folder_edit):
+                w.setVisible(plan)
+            if plan:
+                self.folder_edit.setPlaceholderText(tasks.TASKS[task_id]["default_folder"])
+
+        def current_parameters(self) -> dict:
+            task_id = self.task_box.currentData()
+            if tasks.TASKS[task_id]["output_type"] == tasks.STUDY_PLAN:
+                return {"days": self.days_box.value(), "folder_name": self.folder_edit.text()}
+            return {"language_style": self.style_box.currentText()}
 
         def enter_workshop(self, state):
             self.state = state
@@ -255,7 +301,12 @@ def run_app() -> int:
         def generate(self):
             if self.thread is not None or not self.state["selected"]:
                 return  # duplicate click while running
-            request = build_request(self.state, self.task_box.currentData())
+            request = build_request(self.state, self.task_box.currentData(), self.current_parameters())
+            try:  # Days / Folder name / style checked before any work
+                tasks.validate_parameters(request["task_id"], request["parameters"])
+            except tasks.TaskError as e:
+                self.status.setText(f"Error: {e.message}")
+                return
             self.generate_btn.setEnabled(False)
             self.last_paths = []
             self.status.setText("Starting...")
@@ -274,7 +325,13 @@ def run_app() -> int:
             self.thread = None
             if result["status"] == "ok":
                 self.last_paths = result["paths"]
-                self.status.setText("Saved: " + "\n".join(result["paths"]))
+                self.last_output_root = result["output_root"]
+                if len(result["paths"]) == 1:
+                    self.status.setText("Saved: " + result["paths"][0])
+                else:
+                    root = Path(result["output_root"])
+                    self.status.setText(f"Saved {len(result['paths'])} PDFs in {root}:\n" + "\n".join(
+                        Path(p).relative_to(root).as_posix() for p in result["paths"]))
                 self.open_document()
             else:
                 self.status.setText(f"Error: {result['error']['message']}")
@@ -287,7 +344,8 @@ def run_app() -> int:
 
         def open_output_folder(self):
             if self.last_paths:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.last_paths[0]).parent)))
+                folder = self.last_output_root or str(Path(self.last_paths[0]).parent)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("Late Night Pal")

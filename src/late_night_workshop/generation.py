@@ -1,13 +1,17 @@
 """Orchestrator: request snapshot -> validated, rendered, published PDFs.
 
-    generate(request, on_progress) -> {"status": "ok", "output_root", "paths", "warnings"}
+    generate(request, on_progress) -> {"status": "ok", "output_root", "paths", "warnings", "timings"}
                                     | {"status": "error", "error": envelope}
 
 request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient"}
 Components are passed in through `deps` so each boundary can be swapped for a stub.
+One Gemini request per Generate; a cheat sheet that overflows gets at most one
+condensation request.
 """
 
+import json
 import tempfile
+import time
 from datetime import date
 
 from . import AppError, gemini_client, inputs, outputs, rendering, tasks, validation, workshops
@@ -24,6 +28,14 @@ DEFAULT_DEPS = {
     "publish": outputs.publish,
 }
 
+CONDENSE_PROMPT = """The cheat sheet below rendered to {pages} pages but must fit on exactly one page.
+Rewrite it shorter: keep the most exam-relevant definitions, formulas and distinctions, cut everything
+else, and use terse list items. Aim for about 60% of the current length. Keep the same JSON format
+(one document with role `cheat-sheet`, day 0, empty allocation).
+
+Current cheat sheet JSON:
+{bundle}"""
+
 
 def _subtitle(sources: list[dict]) -> str:
     names = ", ".join(s["source_id"] for s in sources)
@@ -32,13 +44,20 @@ def _subtitle(sources: list[dict]) -> str:
 
 def generate(request: dict, on_progress=lambda event: None, deps: dict | None = None) -> dict:
     d = {**DEFAULT_DEPS, **(deps or {})}
+    timings = {}
 
     def progress(stage, message):
         on_progress({"stage": stage, "message": message, "source_id": None})
 
+    def timed(key, fn, *args):
+        start = time.perf_counter()
+        try:
+            return fn(*args)
+        finally:
+            timings[key] = round(timings.get(key, 0) + time.perf_counter() - start, 1)
+
     try:
-        if request.get("task_id") not in tasks.TASKS:
-            raise RequestError("invalid_task", f"Task '{request.get('task_id')}' is not available yet.")
+        tasks.validate_parameters(request.get("task_id"), request.get("parameters"))  # before any work
         if not request.get("selected_paths"):
             raise RequestError("no_inputs", "Select at least one PDF first.")
         checked = workshops.validate_paths(request["workshop_root"], request["destination"], request["selected_paths"])
@@ -50,21 +69,38 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
                                      gemini_client.get_capabilities())
         sources = prep["sources"]
         task = tasks.resolve_task(request, sources)
+        subtitle = _subtitle(sources)
 
-        progress("generating", f"Sending {len(sources)} PDF(s) to Gemini ({gemini_client.model_name()})...")
-        response = d["generate_content"](task, sources)
-
+        progress("generating", f"{task['label']}: sending {len(sources)} PDF(s) to Gemini "
+                               f"({gemini_client.model_name()})...")
+        response = timed("gemini_s", d["generate_content"], task, sources)
         progress("validating", "Checking Gemini's response...")
         bundle = validation.validate_bundle(response["raw_text"], task, sources)
 
         with tempfile.TemporaryDirectory(prefix="lnp_job_") as work_dir:
-            progress("rendering", "Compiling PDF locally...")
-            rendered = d["render_bundle"](bundle, task, work_dir, _subtitle(sources))
+            n = len(bundle["documents"])
+            progress("rendering", f"Compiling {n} PDF{'s' if n > 1 else ''} locally...")
+            try:
+                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle)
+            except rendering.RenderError as e:
+                if e.code != "page_limit_exceeded":
+                    raise
+                progress("generating", "Cheat sheet is longer than one page; asking Gemini to condense it once...")
+                doc = bundle["documents"][0]
+                condensed_task = dict(task, prompt=CONDENSE_PROMPT.format(
+                    pages=e.details, bundle=json.dumps({"documents": [{**doc, "day": 0}], "allocation": []})))
+                response = timed("gemini_s", d["generate_content"], condensed_task, [])
+                bundle = validation.validate_bundle(response["raw_text"], task, sources)
+                progress("rendering", "Compiling condensed cheat sheet...")
+                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle)
             progress("publishing", "Saving...")
-            published = d["publish"](rendered, task, checked["destination"], checked["root"])
-        return {"status": "ok", **published, "warnings": prep["warnings"]}
+            published = timed("publish_s", d["publish"], rendered, task, checked["destination"], checked["root"])
+        return {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,
+                "documents": [{"document_id": r["document_id"], "page_count": r.get("page_count"),
+                               "render_s": r.get("seconds")} for r in rendered]}
     except AppError as e:
-        return {"status": "error", "error": e.envelope()}
+        return {"status": "error", "error": e.envelope(), "timings": timings}
     except OSError as e:
-        return {"status": "error", "error": {"code": "io_error", "stage": "", "message": f"File error: {e.strerror or e}",
-                                             "source_id": None, "retryable": True, "details": {}}}
+        return {"status": "error", "timings": timings,
+                "error": {"code": "io_error", "stage": "", "message": f"File error: {e.strerror or e}",
+                          "source_id": None, "retryable": True, "details": {}}}

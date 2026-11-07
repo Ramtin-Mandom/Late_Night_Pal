@@ -1,0 +1,1 @@
+Language style: Technical. Use precise domain terminology and notation, state definitions formally, and include full detail and caveats. Assume the reader is comfortable with the subject's vocabulary.

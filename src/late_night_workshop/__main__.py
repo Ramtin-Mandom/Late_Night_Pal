@@ -22,9 +22,10 @@ def main() -> int:
             stream.reconfigure(errors="replace")
 
     if args.check:
-        from . import rendering
+        from . import rendering, tasks
         ok = True
-        for rel in ("prompts/summary.md", "templates/document.tex"):
+        rels = [t["prompt_file"] for t in tasks.TASKS.values()] + ["prompts/" + s for s in tasks.STYLES.values()]
+        for rel in rels + ["prompts/format.md", "templates/document.tex", "templates/cheat-sheet.tex"]:
             found = resource_path(rel).is_file()
             ok &= found
             print(f"resource {rel}: {'ok' if found else 'MISSING'}")
@@ -40,7 +41,7 @@ def main() -> int:
         pdf = Path(args.summarize).resolve()
         result = generation.generate(
             {"workshop_root": str(pdf.parent), "destination": str(pdf.parent), "selected_paths": [str(pdf)],
-             "task_id": "summary", "parameters": {}, "efficient": False},
+             "task_id": "summary", "parameters": {"language_style": "Standard"}, "efficient": False},
             lambda ev: print(ev["message"]),
         )
         if result["status"] == "ok":

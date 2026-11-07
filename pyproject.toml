@@ -11,6 +11,7 @@ dependencies = [
     "PySide6>=6.7",
     "google-genai>=3.0",
     "python-dotenv>=1.0",
+    "pypdf>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -23,4 +24,4 @@ late-night-workshop = "late_night_workshop.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-late_night_workshop = ["prompts/*.md", "templates/*.tex"]
+late_night_workshop = ["prompts/*.md", "prompts/styles/*.md", "templates/*.tex"]
