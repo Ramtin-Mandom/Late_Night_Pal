@@ -65,6 +65,16 @@ Headless checks:
 
 **Verified on:** Windows 10 Home 22H2 (10.0.19045, 64-bit), with MiKTeX `lualatex` on PATH, on 2026-11-07. The ZIP was extracted to a fresh folder with spaces in its name, outside the checkout, and launched from an unrelated folder without the dev venv. The packaged exe was operated through Windows UI Automation: native Create/Open Workshop dialogs, Recents, then Summary of `Lectures\photosynthesis-lecture.pdf`. It wrote `Revision\summary.pdf` in 218 s (almost all of it Gemini), opened it in the default PDF viewer, and Open output folder opened Explorer on `Revision`.
 
+**Phase 2 packaged walkthrough (P2-M7, 2026-11-07):** same PC, Chrome 156.0.8078.80. The rebuilt ZIP was extracted to `%TEMP%\LNP M7 Packaged Test\` (spaces, outside the checkout). `--check` run from `C:\Windows` reported every resource including `assets/recent-downloads-bin.svg`, `svg icons: ok` and `frozen build: True`. The exe was then driven through Windows UI Automation and real mouse input, with `LOCALAPPDATA` pointed at a disposable folder, so recents, tags and cut records stayed apart from the real ones and Chrome data came from a disposable profile made by `tests/chrome_download_probe.py`. Results:
+- **Startup and navigation:** the workshop opened from Recents, and folders opened by name.
+- **Recent downloads:** the bin icon rendered, and the startup count showed (1). The real download saved to a custom folder was listed with its completion time. Copy to current folder copied it in and kept the original.
+- **Super Wrap:** `Calculus/Cal_1/assignment/{1,2}.pdf` and `Calculus/Cal_1/Note_1.pdf`, with the selection following the moved files.
+- **Wrap and Rip:** Wrap gave `Batch/Calculus`; Rip moved `Calculus` back up and removed `Batch`.
+- **Windows clipboard:** Copy appeared as a file drop list with drop effect 1, and Paste made `scan1 (2).txt`. An Explorer-style cut (`Preferred DropEffect` 2) moved an outside file in, and the clipboard was cleared afterwards.
+- **Delete:** the file left disk and appeared in the Recycle Bin.
+- **Name tags:** a real mouse drag renamed `scan2.txt` to `assignment_1.txt`. After closing and relaunching, the chip was restored and the next drop gave `assignment_2.txt`.
+- **Make me:** Summary of `photosynthesis-lecture.pdf` wrote `summary.pdf` in 239 s, with a temporary `.env` next to the exe that was removed afterwards.
+
 Build from the repository root (about 1½ minutes):
 
 ```powershell
@@ -74,7 +84,7 @@ Build from the repository root (about 1½ minutes):
 
 - **Share:** `dist\LateNightPal-win64.zip` (about 75 MB).
 - **After extracting, launch:** `Late Night Pal\Late Night Pal.exe`. No Python installation is needed.
-- The ZIP contains `Late Night Pal.exe`, `_internal\` (Qt, Python and the bundled prompts and templates), `Demo\Biology Demo Workshop\`, `Demo\Example output\M6 Daily Study Plan (pre-fix)\`, `.env.example` and `READ ME FIRST.txt`.
+- The ZIP contains `Late Night Pal.exe`, `_internal\` (Qt with its SVG plugins, Python, and the bundled prompts, templates and `assets\recent-downloads-bin.svg`), `Demo\Biology Demo Workshop\`, `Demo\Example output\M6 Daily Study Plan (pre-fix)\`, `.env.example` and `READ ME FIRST.txt`.
 - The build script refuses to zip `.env` files, logs, caches, `recents.json`, or any file containing the developer's key. It also keeps every path inside the ZIP under 150 characters, because Windows limits full paths to 260.
 
 **On the receiving PC:**
@@ -82,7 +92,7 @@ Build from the repository root (about 1½ minutes):
 1. Install [MiKTeX](https://miktex.org/download) and make sure `lualatex` is on PATH. Compile something once so MiKTeX finishes installing its packages and fonts before the demo.
 2. Extract the ZIP anywhere. A short path such as `C:\Demo` is safest.
 3. Provide the Gemini key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
-4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 14 bundled resources, `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
+4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 15 bundled resources (prompts, templates and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
 
 The executable is windowed. Command-line modes print to the PowerShell window they were started from.
 

@@ -10,7 +10,7 @@ Responsibility and entry point: start the app, show workshops, browse and select
 
 | File or symbol | What it does |
 | --- | --- |
-| `__main__.py` · `main()` | `python -m late_night_workshop` or `Late Night Pal.exe`. `--check` verifies every prompt, style fragment and template, LaTeX, whether a Gemini key is present (never printing it) and `frozen build`; `--extract FILE` prints a local conversion; `_console_streams()` attaches the windowed exe to its parent console for these modes; `--summarize FILE` runs a Standard Summary with the PDF's folder as workshop and destination → `summary.pdf` (suffixed if taken) |
+| `__main__.py` · `main()` | `python -m late_night_workshop` or `Late Night Pal.exe`. `--check` verifies every prompt, style fragment, template and the bin icon asset, Qt's SVG image support, LaTeX, whether a Gemini key is present (never printing it) and `frozen build`; `--extract FILE` prints a local conversion; `_console_streams()` attaches the windowed exe to its parent console for these modes; `--summarize FILE` runs a Standard Summary with the PDF's folder as workshop and destination → `summary.pdf` (suffixed if taken) |
 | `ui.py` · `build_request(state, task_id, parameters)` | Qt-free snapshot `{workshop_root, destination, selected_paths, task_id, parameters, efficient}` taken at Generate |
 | `ui.py` · `make_me_status(state)` | Qt-free Generate eligibility `{ok, blockers, message}` from `inputs.generation_blockers()`: missing entries, folders, unsupported types and unreadable files block Generate and are named |
 | `ui.py` · `Window` start page | Welcome, Recent Workshops, Open/Create Workshop; a missing recent offers Open another folder / Remove |
@@ -99,6 +99,6 @@ Organize mode runs Delete, Rip, Wrap, Copy, Paste and Super Wrap: `Window.organi
 
 | File or symbol | What it does |
 | --- | --- |
-| `pyproject.toml` | Dependencies (PySide6, google-genai, python-dotenv, pypdf, python-pptx, python-docx) and package data, including `prompts/styles/*.md` |
-| `packaging/late-night-workshop.spec`, `packaging/launcher.py` | PyInstaller one-folder **windowed** build `dist/Late Night Pal/Late Night Pal.exe`. Bundles `prompts/` (8 tasks, `format.md`, `styles/`) and `templates/`, all `late_night_workshop`, `pptx` and `docx` submodules plus their package data (XML templates), and pypdf, dotenv and the Qt plugins (via PyInstaller hooks). Never bundles the API key |
+| `pyproject.toml` | Dependencies (PySide6, google-genai, python-dotenv, pypdf, python-pptx, python-docx) and package data: `prompts/*.md`, `prompts/styles/*.md`, `templates/*.tex`, `assets/*.svg` |
+| `packaging/late-night-workshop.spec`, `packaging/launcher.py` | PyInstaller one-folder **windowed** build `dist/Late Night Pal/Late Night Pal.exe`. Bundles `prompts/` (8 tasks, `format.md`, `styles/`), `templates/` and `assets/` (the bin icon, found at runtime by `resource_path()` under `_internal/late_night_workshop/`; Qt's `qsvg` plugins come with the PySide6 hook), all `late_night_workshop`, `pptx` and `docx` submodules plus their package data (XML templates), and pypdf, dotenv and the Qt plugins (via PyInstaller hooks). Never bundles the API key |
 | `packaging/build_release.py` | Runs the spec, stages `Late Night Pal/` with `Demo/` (a copy of `demo/`), `.env.example` and `READ ME FIRST.txt`, refuses `.env`, `*.log`, `recents.json`, cache folders, any file containing the developer key, and any path over 150 characters, then writes `dist/LateNightPal-win64.zip` |
