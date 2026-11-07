@@ -17,6 +17,8 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 3. The selection survives navigation and task changes. Clicking a selected file again deselects it. Only PDF, PPTX, DOCX, TXT and MD files can be selected; other files (for example `.png`) are greyed out.
 4. **Up**, `[folder] Revision`: this is the destination captured at Generate.
 
+Phase 2 (planned in P2-M1, built in P2-M2): this same selection is shared with Organize, may then include folders, and is changed only through the workshop helpers; Make me names any folder or unsupported file and disables Generate until it is removed from Selected Inputs. Organizer buttons will snapshot root, current folder and selection at click with `organizing.capture_request()`, just as Generate does with `build_request()`.
+
 ## 3. Choose a task and parameters
 
 - **Output type → Single file**: Task is Checklist, Notes, **Summary** (default), Answer key, One-page cheat sheet or Sample questions, plus **Language style** (Technical / **Standard** / Simple).
