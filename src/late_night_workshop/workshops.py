@@ -8,6 +8,7 @@ so renaming the app never loses them.
 
 import json
 import os
+import stat
 from pathlib import Path
 
 from . import AppError
@@ -68,6 +69,19 @@ def create_workshop(path) -> dict:
     return open_workshop(root)
 
 
+_LINK_TAGS = {0xA000000C, 0xA0000003}  # IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT (junction)
+
+
+def is_link(path) -> bool:
+    """Symlink or junction, checked without following it. Other reparse points
+    (OneDrive cloud placeholders) are ordinary files and stay allowed."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) in _LINK_TAGS
+
+
 def is_inside(root: Path, path: Path) -> bool:
     try:
         return Path(path).resolve().is_relative_to(Path(root).resolve())
@@ -98,17 +112,46 @@ def browse(state: dict, folder=None) -> list[dict]:
 
 
 def toggle_selection(state: dict, path) -> bool:
-    """Toggle one file; returns whether it is now selected."""
+    """Toggle one file or folder in the shared selection; returns whether it is now selected.
+    Any ordinary file type may be selected (Make me checks its own stricter rules)."""
+    if is_link(path):
+        raise WorkshopError("link_rejected", f"{Path(path).name} is a link or junction and cannot be selected.")
     p = Path(path).resolve()
     if not is_inside(state["root"], p):
         raise WorkshopError("outside_workshop", f"{p.name} is outside the workshop.")
-    if not p.is_file():
-        raise WorkshopError("not_a_file", f"{p.name} is not a file.")
+    if p == state["root"]:
+        raise WorkshopError("root_selected", "The workshop folder itself cannot be selected.")
+    if not (p.is_file() or p.is_dir()):
+        raise WorkshopError("missing_entry", f"{p.name} no longer exists. Click Refresh.")
     if p in state["selected"]:
         state["selected"].discard(p)
         return False
     state["selected"].add(p)
     return True
+
+
+def deselect(state: dict, path) -> bool:
+    """Remove one entry by its canonical path, even if it is missing or outside the current view.
+    Never touches the file. Returns whether anything was removed."""
+    key = os.path.normcase(str(path))
+    hits = [p for p in state["selected"] if os.path.normcase(str(p)) == key]
+    for p in hits:
+        state["selected"].discard(p)
+    return bool(hits)
+
+
+def prune(state: dict) -> list[Path]:
+    """Explicit Refresh only: drop selected entries that no longer exist and, if the current
+    folder was removed, move to its nearest surviving folder inside the workshop.
+    Returns the removed paths so the UI can report them (nothing is pruned silently)."""
+    gone = [p for p in selected_sorted(state) if not os.path.lexists(p)]
+    for p in gone:
+        state["selected"].discard(p)
+    current = state["current"]
+    while current != state["root"] and not current.is_dir():
+        current = current.parent
+    state["current"] = current
+    return gone
 
 
 def selected_sorted(state: dict) -> list[Path]:

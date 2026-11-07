@@ -12,12 +12,14 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 
 ## 2. Select inputs across folders
 
-1. Click `[folder] Lectures`, then `topic.pdf` → `toggle_selection()`. The row turns blue and **Selected Inputs** shows `Lectures/topic.pdf`.
+1. Click the name `[folder] Lectures` to open it, then tick `topic.pdf` (or click its name) → `toggle_selection()`. The row turns blue and **Selected Inputs** shows `Lectures/topic.pdf` with a **Remove** button.
 2. **Up**, `[folder] Readings`, `topic.pdf` → Selected Inputs lists both relative paths.
-3. The selection survives navigation and task changes. Clicking a selected file again deselects it. Only PDF, PPTX, DOCX, TXT and MD files can be selected; other files (for example `.png`) are greyed out.
+3. The selection survives navigation, mode and task changes. Ticking a folder's checkbox selects the folder without opening it. Any file type can be selected (types Make me can't use are greyed). **Remove** deselects an entry from any view, even one deleted on disk; it never deletes the file.
 4. **Up**, `[folder] Revision`: this is the destination captured at Generate.
 
-Phase 2 (planned in P2-M1, built in P2-M2): this same selection is shared with Organize, may then include folders, and is changed only through the workshop helpers; Make me names any folder or unsupported file and disables Generate until it is removed from Selected Inputs. Organizer buttons will snapshot root, current folder and selection at click with `organizing.capture_request()`, just as Generate does with `build_request()`.
+**Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
+
+**Refresh** (beside Up) rescans the folder and drops selected entries that no longer exist, naming them in the status. Ordinary redraws never drop selections. **Organize** shows the six actions disabled until P2-M3; they will snapshot root, current folder and selection at click with `organizing.capture_request()`, as Generate does with `build_request()`.
 
 ## 3. Choose a task and parameters
 

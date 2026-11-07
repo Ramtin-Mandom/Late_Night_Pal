@@ -27,7 +27,6 @@ Outcome (execute_plan, P2-M3), one per plan item, in plan order:
 """
 
 import os
-import stat
 from pathlib import Path
 
 from . import AppError, tasks, workshops
@@ -66,17 +65,7 @@ def outcome(item: dict, status: str, change=None, error=None) -> dict:
 
 # ---------- shared preflight (every mutating planner uses these; M3 executor rechecks them) ----------
 
-_LINK_TAGS = {0xA000000C, 0xA0000003}  # IO_REPARSE_TAG_SYMLINK, IO_REPARSE_TAG_MOUNT_POINT (junction)
-
-
-def _is_link(path: Path) -> bool:
-    """Symlink or junction, checked without following it. Other reparse points
-    (OneDrive cloud placeholders) are ordinary files and stay allowed."""
-    try:
-        st = os.lstat(path)
-    except OSError:
-        return False
-    return stat.S_ISLNK(st.st_mode) or getattr(st, "st_reparse_tag", 0) in _LINK_TAGS
+_is_link = workshops.is_link  # one link/junction rule shared with selection
 
 
 def _check_no_links(root: Path, path: Path) -> None:

@@ -16,6 +16,7 @@ original_overrides holds source IDs the student approved for "Process original" 
 
 import hashlib
 import mimetypes
+import os
 from pathlib import Path
 
 from . import AppError, converters
@@ -28,12 +29,30 @@ MIME = {
     ".txt": "text/plain", ".md": "text/markdown",
 }
 PASS_THROUGH = {".txt", ".md"}
-SELECTABLE = set(MIME)  # extensions the browser lets students select
+SELECTABLE = set(MIME)  # extensions Make me can use
 MIN_CHARS_PER_PAGE = 40
+SUPPORTED_NAMES = "PDF, PPTX, DOCX, TXT or MD"
 
 
 class InputError(AppError):
     stage = "preparing"
+
+
+def generation_blockers(paths) -> dict:
+    """Make me eligibility: {path: reason} for each selected entry generation cannot use.
+    Empty means every entry is a readable supported file. The UI only uses this for
+    feedback; generation still rechecks with workshops.validate_paths()."""
+    blockers = {}
+    for p in map(Path, paths):
+        if not os.path.lexists(p):
+            blockers[p] = "no longer exists"
+        elif p.is_dir():
+            blockers[p] = "is a folder; Make me uses files only"
+        elif p.suffix.lower() not in SELECTABLE:
+            blockers[p] = f"{p.suffix or 'this'} type is not supported; use {SUPPORTED_NAMES}"
+        elif not os.access(p, os.R_OK):
+            blockers[p] = "cannot be read"
+    return blockers
 
 
 def _low_text_units(ext: str, units: list[dict]) -> list:

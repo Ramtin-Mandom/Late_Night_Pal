@@ -9,8 +9,12 @@ from pathlib import Path
 
 from . import generation, inputs, tasks, workshops
 
-SELECTED_BG = "#2563eb"  # blue highlight for selected files
+SELECTED_BG = "#2563eb"  # blue highlight for selected entries
 SELECTED_FG = "#ffffff"
+ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("copy", "Copy"), ("paste", "Paste"),
+                    ("super_wrap", "Super Wrap")]
+RIP_HELP = "Move each selected folder's contents up one level."
+ORGANIZE_PENDING = "Not available yet: organizer actions arrive in P2-M3."
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -65,10 +69,25 @@ def build_request(state: dict, task_id: str = "summary", parameters: dict | None
     }
 
 
+def make_me_status(state: dict) -> dict:
+    """Generate eligibility from the shared selection: {ok, blockers: {path: reason}, message}.
+    Feedback only; generate() still runs workshops.validate_paths() at the boundary."""
+    selected = workshops.selected_sorted(state)
+    blockers = inputs.generation_blockers(selected)
+    if not selected:
+        return {"ok": False, "blockers": {}, "message": "Select at least one file to Generate."}
+    if blockers:
+        names = "; ".join(f"{workshops.relative(state, p)} ({why})" for p, why in blockers.items())
+        return {"ok": False, "blockers": blockers,
+                "message": f"Generate is off until you remove what Make me can't use: {names}."}
+    return {"ok": True, "blockers": {}, "message": ""}
+
+
 def run_app() -> int:
-    from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
+    from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal
     from PySide6.QtGui import QBrush, QColor, QDesktopServices
-    from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
+                                   QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
                                    QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -209,15 +228,20 @@ def run_app() -> int:
             nav = QHBoxLayout()
             self.up_btn = QPushButton("Up")
             self.up_btn.clicked.connect(self.go_up)
+            self.refresh_btn = QPushButton("Refresh")
+            self.refresh_btn.setToolTip("Rescan this folder and drop selected entries that no longer exist.")
+            self.refresh_btn.clicked.connect(self.refresh_clicked)
             self.folder_lbl = QLabel()
             nav.addWidget(self.up_btn)
+            nav.addWidget(self.refresh_btn)
             nav.addWidget(self.folder_lbl, 1)
             left.addLayout(nav)
             self.browser = QListWidget()
-            self.browser.itemClicked.connect(self.browser_clicked)
             left.addWidget(self.browser)
-            left.addWidget(QLabel("Click a folder to open it; click a PDF, PPTX, DOCX, TXT or MD file to "
-                                  "select or deselect it."))
+            hint = QLabel("Tick the box to select a file or folder. Click a folder's name to open it; "
+                          "clicking a file's name also selects it.")
+            hint.setWordWrap(True)
+            left.addWidget(hint)
             body.addLayout(left, 3)
 
             right = QVBoxLayout()
@@ -225,6 +249,35 @@ def run_app() -> int:
             right.addWidget(self.selected_lbl)
             self.selected_list = QListWidget()
             right.addWidget(self.selected_list)
+            modes = QHBoxLayout()
+            self.mode_group = QButtonGroup(page)
+            self.mode_stack = QStackedWidget()
+            for i, label in enumerate(("Organize", "Make me")):
+                b = QPushButton(label)
+                b.setCheckable(True)
+                self.mode_group.addButton(b, i)
+                modes.addWidget(b)
+            right.addLayout(modes)
+            right.addWidget(self.mode_stack)
+            org_page = QWidget()
+            org = QVBoxLayout(org_page)
+            self.action_btns = {}
+            grid = QHBoxLayout()
+            for action, label in ORGANIZE_ACTIONS:
+                b = QPushButton(label)
+                b.setEnabled(False)
+                b.setToolTip(ORGANIZE_PENDING)
+                self.action_btns[action] = b
+                grid.addWidget(b)
+            org.addLayout(grid)
+            rip_help = QLabel(f"Rip: {RIP_HELP}")
+            rip_help.setWordWrap(True)
+            org.addWidget(rip_help)
+            org.addWidget(QLabel(ORGANIZE_PENDING))
+            org.addStretch(1)
+            make_page = QWidget()
+            right_outer, right = right, QVBoxLayout(make_page)
+            right.setContentsMargins(0, 0, 0, 0)
             right.addWidget(QLabel("Output type"))
             self.output_type = QComboBox()
             self.output_type.addItems([tasks.STUDY_PLAN, tasks.SINGLE_FILE])
@@ -258,13 +311,13 @@ def run_app() -> int:
             self.task_box.currentIndexChanged.connect(self.task_changed)
             self.output_type.setCurrentText(tasks.SINGLE_FILE)
             self.output_type_changed(tasks.SINGLE_FILE)
+            self.eligibility_lbl = QLabel("")
+            self.eligibility_lbl.setWordWrap(True)
+            self.eligibility_lbl.setStyleSheet("color: #b91c1c;")
+            right.addWidget(self.eligibility_lbl)
             self.generate_btn = QPushButton("Generate")
             self.generate_btn.clicked.connect(self.generate)
             right.addWidget(self.generate_btn)
-            self.status = QLabel("")
-            self.status.setWordWrap(True)
-            self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            right.addWidget(self.status)
             row = QHBoxLayout()
             self.open_doc_btn = QPushButton("Open document")
             self.open_folder_btn = QPushButton("Open output folder")
@@ -273,7 +326,17 @@ def run_app() -> int:
             row.addWidget(self.open_doc_btn)
             row.addWidget(self.open_folder_btn)
             right.addLayout(row)
-            body.addLayout(right, 2)
+            right.addStretch(1)
+            self.mode_stack.addWidget(org_page)
+            self.mode_stack.addWidget(make_page)
+            self.mode_group.idClicked.connect(self.mode_changed)
+            self.mode_group.button(1).setChecked(True)  # Make me by default, for continuity
+            self.mode_stack.setCurrentIndex(1)
+            self.status = QLabel("")
+            self.status.setWordWrap(True)
+            self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            right_outer.addWidget(self.status)
+            body.addLayout(right_outer, 2)
             lay.addLayout(body)
             return page
 
@@ -312,46 +375,117 @@ def run_app() -> int:
             self.refresh()
             self.stack.setCurrentIndex(1)
 
+        def mode_changed(self, index):
+            """Switch Organize / Make me; selection and every Make me setting are untouched."""
+            self.mode_stack.setCurrentIndex(index)
+            self.refresh_selected()
+
+        def later(self, fn, *args):
+            QTimer.singleShot(0, lambda: fn(*args))  # rebuild rows after the clicked widget's signal returns
+
         def refresh(self, folder=None):
+            """Redraw the current folder. Never changes the selection (only Refresh prunes)."""
             entries = workshops.browse(self.state, folder)
             rel = workshops.relative(self.state, self.state["current"])
             self.folder_lbl.setText(f"Current folder: {'/' if rel == '.' else rel}")
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
             self.browser.clear()
             for e in entries:
-                is_pdf = not e["is_dir"] and e["path"].suffix.lower() in inputs.SELECTABLE  # selectable file
-                item = QListWidgetItem(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
-                item.setData(PATH_ROLE, str(e["path"]))
-                item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else ("pdf" if is_pdf else "other"))
+                path = str(e["path"])
+                supported = e["is_dir"] or e["path"].suffix.lower() in inputs.SELECTABLE
+                item = QListWidgetItem()
+                item.setData(PATH_ROLE, path)
+                item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else "file")
+                row = QWidget()
+                hl = QHBoxLayout(row)
+                hl.setContentsMargins(4, 0, 4, 0)
+                box = QCheckBox()
+                box.setChecked(e["selected"])
+                box.setAccessibleName(f"Select {e['name']}")
+                box.setToolTip("Select or deselect")
+                box.clicked.connect(lambda _=False, p=path: self.later(self.toggle, p))
+                name = QPushButton(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
+                name.setFlat(True)
+                name.setStyleSheet("text-align: left;")
+                if e["is_dir"]:
+                    name.setAccessibleName(f"Open folder {e['name']}")
+                    name.clicked.connect(lambda _=False, p=path: self.later(self.open_folder, p))
+                else:
+                    name.setAccessibleName(f"Select {e['name']}")
+                    name.clicked.connect(lambda _=False, p=path: self.later(self.toggle, p))
+                if not supported:
+                    name.setToolTip("Organize can use this file; Make me can't (PDF, PPTX, DOCX, TXT, MD only).")
                 if e["selected"]:
-                    item.setBackground(QBrush(QColor(SELECTED_BG)))
-                    item.setForeground(QBrush(QColor(SELECTED_FG)))
-                elif not e["is_dir"] and not is_pdf:
-                    item.setForeground(QBrush(QColor("#888888")))
-                    item.setToolTip("Only PDF, PPTX, DOCX, TXT and MD files can be selected.")
+                    row.setStyleSheet(f"background: {SELECTED_BG}; color: {SELECTED_FG};")
+                elif not supported:
+                    name.setStyleSheet("text-align: left; color: #888888;")
+                hl.addWidget(box)
+                hl.addWidget(name, 1)
+                item.setSizeHint(row.sizeHint())
                 self.browser.addItem(item)
-            self.browser.clearSelection()  # selection is shown by the blue background, not Qt's selection
+                self.browser.setItemWidget(item, row)
             self.refresh_selected()
 
         def refresh_selected(self):
-            rels = [workshops.relative(self.state, p) for p in workshops.selected_sorted(self.state)]
+            """Selected Inputs from the one workshop selection; Generate eligibility from make_me_status()."""
+            selected = workshops.selected_sorted(self.state)
+            status = make_me_status(self.state)
             self.selected_list.clear()
-            self.selected_list.addItems(rels)
-            self.selected_lbl.setText(f"Selected Inputs ({len(rels)})")
-            self.generate_btn.setEnabled(bool(rels) and self.thread is None)
+            folders = 0
+            for p in selected:
+                rel = workshops.relative(self.state, p)
+                exists = p.exists()
+                folders += p.is_dir()
+                kind = "[folder] " if p.is_dir() else ("[missing] " if not exists else "")
+                item = QListWidgetItem()
+                row = QWidget()
+                hl = QHBoxLayout(row)
+                hl.setContentsMargins(4, 0, 4, 0)
+                lbl = QLabel(kind + rel)
+                lbl.setToolTip(str(p))
+                if p in status["blockers"] and self.mode_stack.currentIndex() == 1:
+                    lbl.setStyleSheet("color: #b91c1c;")  # reason is in the eligibility note and tooltip
+                    lbl.setToolTip(f"{p}\nMake me can't use this: {status['blockers'][p]}")
+                remove = QPushButton("Remove")
+                remove.setAccessibleName(f"Remove {rel} from selection")
+                remove.setToolTip("Deselect only; the file or folder is not deleted.")
+                remove.clicked.connect(lambda _=False, q=str(p): self.later(self.remove_selected, q))
+                hl.addWidget(lbl, 1)
+                hl.addWidget(remove)
+                item.setSizeHint(row.sizeHint())
+                self.selected_list.addItem(item)
+                self.selected_list.setItemWidget(item, row)
+            files = len(selected) - folders
+            self.selected_lbl.setText(f"Selected Inputs ({len(selected)}: {files} file{'s' * (files != 1)}, "
+                                      f"{folders} folder{'s' * (folders != 1)})")
+            self.eligibility_lbl.setText(status["message"] if status["blockers"] else "")
+            self.generate_btn.setEnabled(status["ok"] and self.thread is None)
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
 
-        def browser_clicked(self, item):
-            kind, path = item.data(PATH_ROLE + 1), item.data(PATH_ROLE)
+        def toggle(self, path):
             try:
-                if kind == "dir":
-                    self.refresh(path)
-                elif kind == "pdf":
-                    workshops.toggle_selection(self.state, path)
-                    self.refresh()
+                workshops.toggle_selection(self.state, path)
             except workshops.WorkshopError as e:
                 self.status.setText(f"Error: {e.message}")
+            self.refresh()
+
+        def open_folder(self, path):
+            try:
+                self.refresh(path)
+            except workshops.WorkshopError as e:
+                self.status.setText(f"Error: {e.message}")
+
+        def remove_selected(self, path):
+            workshops.deselect(self.state, path)
+            self.refresh()
+
+        def refresh_clicked(self):
+            gone = workshops.prune(self.state)
+            self.refresh()
+            if gone:
+                self.status.setText("Refresh removed from the selection (no longer on disk): " + ", ".join(
+                    workshops.relative(self.state, p) for p in gone))
 
         def go_up(self):
             if self.state["current"] != self.state["root"]:
@@ -359,8 +493,8 @@ def run_app() -> int:
 
         # ---------- generation ----------
         def generate(self):
-            if self.thread is not None or not self.state["selected"]:
-                return  # duplicate click while running
+            if self.thread is not None or not make_me_status(self.state)["ok"]:
+                return  # duplicate click while running, or the selection has entries Make me can't use
             request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
                                     self.efficient_box.isChecked())
             try:  # Days / Folder name / style checked before any work
