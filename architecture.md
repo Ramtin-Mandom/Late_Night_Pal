@@ -1,8 +1,8 @@
 # Architecture
 
-Implemented through M3: workshop shell, shared pipeline, and all eight tasks with their output layouts. Package root: `src/late_night_workshop/` (internal id; the app's display name is Late Night Pal). The proposed full plan is in `components.md` and `PROJECT_MAP_AND_MILESTONES.md`; this file lists only what exists.
+Implemented through M4: workshop shell, shared pipeline, all eight tasks with their output layouts, and Efficient (local text conversion) with caching and scan handling. Package root: `src/late_night_workshop/` (internal id; the app's display name is Late Night Pal). The proposed full plan is in `components.md` and `PROJECT_MAP_AND_MILESTONES.md`; this file lists only what exists.
 
-Pipeline order (`generation.generate`): validate parameters and paths → LaTeX + destination preflight → prepare inputs → resolve task → **one** Gemini request → validate the whole bundle → render every PDF in a temp dir → publish. A cheat sheet that overflows gets at most one condensation request.
+Pipeline order (`generation.generate`): validate parameters and paths → LaTeX + destination preflight → prepare inputs (original or local text; scan decisions go back to the UI, and Cancel ends here with zero API calls) → resolve task → **one** Gemini request → validate the whole bundle → render every PDF in a temp dir → publish. A cheat sheet that overflows gets at most one condensation request.
 
 ## Desktop UI and entry point
 
@@ -13,8 +13,8 @@ Responsibility and entry point: start the app, show workshops, browse and select
 | `__main__.py` · `main()` | `python -m late_night_workshop`; `--check` verifies every prompt, style fragment, template and LaTeX; `--summarize FILE` runs a Standard Summary with the PDF's folder as workshop and destination → `summary.pdf` (suffixed if taken) |
 | `ui.py` · `build_request(state, task_id, parameters)` | Qt-free snapshot `{workshop_root, destination, selected_paths, task_id, parameters, efficient}` taken at Generate |
 | `ui.py` · `Window` start page | Welcome, Recent Workshops, Open/Create Workshop; a missing recent offers Open another folder / Remove |
-| `ui.py` · `Window` workshop page | Up and folder browser (click a folder to enter, click a PDF to toggle), blue `SELECTED_BG`, Selected Inputs list (relative paths). **Output type** (Study plan / Single file) → **Task** list from `tasks.tasks_for()`. Single file shows **Language style**; Study plan shows **Days** (1–30) and **Folder name** (placeholder = default folder). `current_parameters()` → `tasks.validate_parameters()` before a job starts |
-| `ui.py` · `Worker`, `job_finished` | Runs `generate` on a `QThread`; Generate disabled until done; `quit()` before `wait()` |
+| `ui.py` · `Window` workshop page | Up and folder browser (click a folder to enter, click a PDF to toggle), blue `SELECTED_BG`, Selected Inputs list (relative paths). **Output type** (Study plan / Single file) → **Task** list from `tasks.tasks_for()`. Single file shows **Language style**; Study plan shows **Days** (1–30) and **Folder name** (placeholder = default folder). Both output types show **Efficient** (default off) with `EFFICIENT_NOTE` directly below it. Selectable file types are `inputs.SELECTABLE` (PDF, PPTX, DOCX, TXT, MD); others are greyed out. `current_parameters()` → `tasks.validate_parameters()` before a job starts |
+| `ui.py` · `Worker`, `job_finished` | Runs `generate` on a `QThread`; Generate disabled until done; `quit()` before `wait()`. `Worker.decide()` emits `decision_needed` and blocks on a `threading.Event`; `Window.answer_decisions()` → `choose_for()` shows the **Process original / Cancel** dialog on the UI thread. A cancelled result shows "Cancelled. Nothing was sent…" and re-enables Generate |
 
 Debug first: `build_request(state, "daily-study-plan", {"days": 2})` shows exactly what Generate sends.
 
@@ -38,7 +38,8 @@ Responsibility and entry point: folder truth, selection and recents. `workshops.
 | `tasks.py` · `resolve_task(request, sources)` | Prompt = source index + `prompts/<task>.md` (`{days}` filled in) + `prompts/styles/<style>.md` + `prompts/format.md`; JSON schema with the exact document count (`minItems`/`maxItems`); expected roles and days; layout |
 | `prompts/*.md` | `schedule`, `daily-study-plan`, `checklist`, `notes`, `summary`, `answer-key`, `cheat-sheet`, `sample-questions`; `format.md` holds the shared block grammar and grounding rules |
 | `prompts/styles/{technical,standard,simple}.md` | Language style fragments; study plans use Standard |
-| `inputs.py` · `prepare_inputs(...)` | PDF originals → source records `{source_id, filename, mime_type, fingerprint, mode "original", original_path}`. Non-PDF → `unsupported_input`; Efficient → `unsupported_mode` (M4) |
+| `inputs.py` · `prepare_inputs(root, paths, efficient, capabilities, original_overrides)` | Per file → source record `{source_id, filename, mime_type, fingerprint, mode "original"|"text", original_path, text_parts, cache}` plus `decisions` and `warnings`. TXT/MD always pass through as text. **Efficient off:** original if the client supports the MIME type (PDF), otherwise local conversion with a `converted_locally` warning (PPTX, DOCX). **Efficient on:** local conversion. **Little text** (PDF: average under 40 non-whitespace characters per page, or empty pages; other types: no text) → a `needs_original` decision naming the pages if the original is supported, otherwise `unsupported_input` with an export hint. `original_overrides` (this job only) forces the original for the approved source IDs. Unreadable files give a filename-specific `conversion_failed` |
+| `converters.py` · `convert(path, data)` | `pypdf` text per page, `python-pptx` text frames and table rows per slide (including groups), `python-docx` paragraphs and table rows in body order, UTF-8/UTF-16 text with normalized newlines. Cache in `%LOCALAPPDATA%\late_night_workshop\conversions\<sha256>-<converter>-v<CONVERTER_VERSION>-<OPTIONS>.json`; returns `cache: hit|miss`. Only conversions with some text are cached; cached units get the current source ID attached by `inputs` |
 
 | Task ID | Layout | Output (in the folder captured at Generate) |
 | --- | --- | --- |
@@ -50,7 +51,7 @@ Responsibility and entry point: folder truth, selection and recents. `workshops.
 
 | File or symbol | What it does |
 | --- | --- |
-| `gemini_client.py` · `generate_content(task, sources)` | One Interactions API call, model `gemini-3.8-flash` (or `GEMINI_MODEL`). Each PDF goes inline, preceded by a `Source i: <source_id>` text item; fingerprints are rechecked; 50 MB total cap. Returns untrusted `{raw_text}`. Key-free `GeminiError` codes |
+| `gemini_client.py` · `generate_content(task, sources)` | One Interactions API call, model `gemini-3.8-flash` (or `GEMINI_MODEL`). Originals (PDF) go inline as `document` items, each preceded by a `Source i: <source_id>` text item, with fingerprints rechecked. Text sources become one text item per file (`text_source_item`): `Source i: <id> (text extracted locally…)` with `[<id> - page N]` / `[<id> - slide N]` markers and `[end of <id>]`. One request can mix both. 50 MB total cap. Returns untrusted `{raw_text}`. Key-free `GeminiError` codes |
 | `validation.py` · `validate_bundle(raw, task, sources)` | Blocks: `heading`/`paragraph` (`text`), `list` (`items`), `question` (`label` + `text`; labels kept verbatim, e.g. `2(b)`). Rejects the whole bundle on a wrong role set or count, a missing or duplicate (day, role), identical notes on two days, a missing `Day N` heading in the schedule, a source missing from the file guide, or an allocation that doesn't cover days 1..N, names an unknown source or leaves a source unused. Assigns `document_id` (`schedule`, `day-01-notes`, …) |
 
 Debug first: drop one document from a fixture bundle → `invalid_response` naming the missing role and day.
@@ -66,11 +67,11 @@ Debug first: drop one document from a fixture bundle → `invalid_response` nami
 
 ## Generation and errors
 
-`generation.py` · `generate(request, on_progress, deps)` returns `{status, output_root, paths, warnings, timings: {gemini_s, render_s, publish_s}, documents: [{document_id, page_count, render_s}]}` or `{status: "error", error: envelope}`. `deps` swaps `check_runtime` / `generate_content` / `render_bundle` / `publish` for stubs. If `page_limit_exceeded`, one `CONDENSE_PROMPT` request is sent (no sources re-sent), then the bundle is revalidated and re-rendered; if it still overflows, the job fails with nothing published. `__init__.py` · `AppError` subclasses give `{code, stage, message, source_id, retryable, details}`.
+`generation.py` · `generate(request, on_progress, deps)` returns `{status, output_root, paths, warnings, timings: {gemini_s, render_s, publish_s}, documents: [{document_id, page_count, render_s}]}` or `{status: "error", error: envelope}`. `deps` swaps `check_runtime` / `generate_content` / `render_bundle` / `publish` for stubs. `decide_inputs(decisions) -> {source_id: "process_original"|"cancel"}`: anything other than process_original for every pending source returns `{status: "cancelled"}` before any API call; otherwise preparation reruns with those `original_overrides`. Without a `decide_inputs` callback (the CLI), the job is cancelled. If `page_limit_exceeded`, one `CONDENSE_PROMPT` request is sent (no sources re-sent), then the bundle is revalidated and re-rendered; if it still overflows, the job fails with nothing published. `__init__.py` · `AppError` subclasses give `{code, stage, message, source_id, retryable, details}`.
 
 ## Packaging
 
 | File or symbol | What it does |
 | --- | --- |
-| `pyproject.toml` | Dependencies (PySide6, google-genai, python-dotenv, pypdf) and package data, including `prompts/styles/*.md` |
+| `pyproject.toml` | Dependencies (PySide6, google-genai, python-dotenv, pypdf, python-pptx, python-docx) and package data, including `prompts/styles/*.md` |
 | `packaging/late-night-workshop.spec`, `packaging/launcher.py` | PyInstaller one-folder build `dist/Late Night Pal/`; bundles the `prompts/` and `templates/` folders, never the API key |

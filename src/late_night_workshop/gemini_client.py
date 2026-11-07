@@ -51,10 +51,28 @@ def _sanitize(exc: Exception) -> GeminiError:
     return GeminiError("api_error", f"Gemini request failed ({type(exc).__name__}).", retryable=True)
 
 
+def text_source_item(i: int, s: dict) -> str:
+    """Locally extracted text, attributed by source ID and page/slide number."""
+    parts = [f"Source {i}: {s['source_id']} (text extracted locally from {s['filename']})"]
+    for u in s["text_parts"]:
+        if u["unit"] in ("page", "slide"):
+            parts.append(f"[{s['source_id']} - {u['unit']} {u['number']}]")
+        parts.append(u["text"] or "(no text)")
+    parts.append(f"[end of {s['source_id']}]")
+    return "\n".join(parts)
+
+
 def _source_items(sources: list[dict]) -> list[dict]:
-    """Each original is preceded by a text label carrying its source identity."""
+    """Text sources become one attributed text item; each original is preceded by a text label."""
     items, total = [], 0
     for i, s in enumerate(sources, 1):
+        if s["mode"] == "text":
+            text = text_source_item(i, s)
+            total += len(text.encode("utf-8"))
+            if total > MAX_PDF_BYTES:
+                raise GeminiError("input_too_large", "Selected files are too large together. Select fewer files.")
+            items.append({"type": "text", "text": text})
+            continue
         data = Path(s["original_path"]).read_bytes()
         if "sha256:" + hashlib.sha256(data).hexdigest() != s["fingerprint"]:
             raise GeminiError("source_changed", f"{s['source_id']} changed after it was selected. Generate again.",

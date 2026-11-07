@@ -1,18 +1,22 @@
-"""Late Night Pal desktop UI: workshop start screen, browser + selection, Summary action.
+"""Late Night Pal desktop UI: workshop start screen, browser + selection, task panel.
 
 The UI owns clicks, highlights and dialogs; `workshops` owns path/selection truth and
 `generation.generate()` (run on a worker thread) owns the job.
 """
 
+import threading
 from pathlib import Path
 
-from . import generation, tasks, workshops
+from . import generation, inputs, tasks, workshops
 
 SELECTED_BG = "#2563eb"  # blue highlight for selected files
 SELECTED_FG = "#ffffff"
+EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
+                  "but diagrams, equations, tables, and formatting may be lost.")
 
 
-def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None) -> dict:
+def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None,
+                  efficient: bool = False) -> dict:
     """Snapshot taken at Generate time; later browsing cannot change it."""
     return {
         "workshop_root": str(state["root"]),
@@ -20,14 +24,14 @@ def build_request(state: dict, task_id: str = "summary", parameters: dict | None
         "selected_paths": [str(p) for p in workshops.selected_sorted(state)],
         "task_id": task_id,
         "parameters": dict(parameters or {}),
-        "efficient": False,
+        "efficient": bool(efficient),
     }
 
 
 def run_app() -> int:
     from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
     from PySide6.QtGui import QBrush, QColor, QDesktopServices
-    from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
                                    QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
@@ -36,14 +40,25 @@ def run_app() -> int:
     class Worker(QObject):
         progress = Signal(str)
         finished = Signal(dict)
+        decision_needed = Signal(list)
 
         def __init__(self, request):
             super().__init__()
             self.request = request
+            self.answered = threading.Event()
+            self.answer = {}
+
+        def decide(self, decisions):
+            """Runs on the worker: ask the UI thread, block until it answers."""
+            self.answered.clear()
+            self.decision_needed.emit(decisions)
+            self.answered.wait()
+            return self.answer
 
         def run(self):
             try:
-                result = generation.generate(self.request, lambda ev: self.progress.emit(ev["message"]))
+                result = generation.generate(self.request, lambda ev: self.progress.emit(ev["message"]),
+                                             decide_inputs=self.decide)
             except Exception as e:  # last-resort guard so the UI never hangs in "running"
                 result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
             self.finished.emit(result)
@@ -164,7 +179,8 @@ def run_app() -> int:
             self.browser = QListWidget()
             self.browser.itemClicked.connect(self.browser_clicked)
             left.addWidget(self.browser)
-            left.addWidget(QLabel("Click a folder to open it; click a PDF to select or deselect it."))
+            left.addWidget(QLabel("Click a folder to open it; click a PDF, PPTX, DOCX, TXT or MD file to "
+                                  "select or deselect it."))
             body.addLayout(left, 3)
 
             right = QVBoxLayout()
@@ -194,6 +210,13 @@ def run_app() -> int:
             for w in (self.style_lbl, self.style_box, self.days_lbl, self.days_box, self.folder_lbl_param,
                       self.folder_edit):
                 right.addWidget(w)
+            self.efficient_box = QCheckBox("Efficient")
+            self.efficient_box.setChecked(False)
+            self.efficient_note = QLabel(EFFICIENT_NOTE)
+            self.efficient_note.setWordWrap(True)
+            self.efficient_note.setStyleSheet("color: #666666; font-size: 11px;")
+            right.addWidget(self.efficient_box)
+            right.addWidget(self.efficient_note)
             self.output_type.currentTextChanged.connect(self.output_type_changed)
             self.task_box.currentIndexChanged.connect(self.task_changed)
             self.output_type.setCurrentText(tasks.SINGLE_FILE)
@@ -259,7 +282,7 @@ def run_app() -> int:
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
             self.browser.clear()
             for e in entries:
-                is_pdf = not e["is_dir"] and e["path"].suffix.lower() == ".pdf"
+                is_pdf = not e["is_dir"] and e["path"].suffix.lower() in inputs.SELECTABLE  # selectable file
                 item = QListWidgetItem(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
                 item.setData(PATH_ROLE, str(e["path"]))
                 item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else ("pdf" if is_pdf else "other"))
@@ -268,7 +291,7 @@ def run_app() -> int:
                     item.setForeground(QBrush(QColor(SELECTED_FG)))
                 elif not e["is_dir"] and not is_pdf:
                     item.setForeground(QBrush(QColor("#888888")))
-                    item.setToolTip("Only PDF files can be selected for now.")
+                    item.setToolTip("Only PDF, PPTX, DOCX, TXT and MD files can be selected.")
                 self.browser.addItem(item)
             self.browser.clearSelection()  # selection is shown by the blue background, not Qt's selection
             self.refresh_selected()
@@ -301,7 +324,8 @@ def run_app() -> int:
         def generate(self):
             if self.thread is not None or not self.state["selected"]:
                 return  # duplicate click while running
-            request = build_request(self.state, self.task_box.currentData(), self.current_parameters())
+            request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
+                                    self.efficient_box.isChecked())
             try:  # Days / Folder name / style checked before any work
                 tasks.validate_parameters(request["task_id"], request["parameters"])
             except tasks.TaskError as e:
@@ -316,14 +340,39 @@ def run_app() -> int:
             self.thread.started.connect(self.worker.run)
             self.worker.progress.connect(self.status.setText)
             self.worker.finished.connect(self.job_finished)
+            self.worker.decision_needed.connect(self.answer_decisions)  # queued onto the UI thread
             self.thread.start()
+
+        def choose_for(self, decision) -> str:
+            """Dialog for one scan / no-text file; returns 'process_original' or 'cancel'."""
+            kind = decision.get("unit_kind", "page")
+            where = (f" ({kind}s {', '.join(map(str, decision['units']))})" if decision["units"] else "")
+            box = QMessageBox(QMessageBox.Question, "Little text found",
+                              f"{decision['source_id']}{where} has little or no extractable text. It may be a scan.\n\n"
+                              "Process original sends this file itself to Gemini (other files stay as text). "
+                              "Cancel stops the job; nothing is sent.", parent=self)
+            original = box.addButton("Process original", QMessageBox.AcceptRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            return "process_original" if box.clickedButton() is original else "cancel"
+
+        def answer_decisions(self, decisions):
+            answer = {}
+            for d in decisions:
+                answer[d["source_id"]] = self.choose_for(d)
+                if answer[d["source_id"]] == "cancel":
+                    break
+            self.worker.answer = answer
+            self.worker.answered.set()
 
         def job_finished(self, result):
             # quit() before wait(): a queued quit would only run after this slot returns (deadlock)
             self.thread.quit()
             self.thread.wait()
             self.thread = None
-            if result["status"] == "ok":
+            if result["status"] == "cancelled":
+                self.status.setText("Cancelled. Nothing was sent to Gemini or saved.")
+            elif result["status"] == "ok":
                 self.last_paths = result["paths"]
                 self.last_output_root = result["output_root"]
                 if len(result["paths"]) == 1:
@@ -332,6 +381,8 @@ def run_app() -> int:
                     root = Path(result["output_root"])
                     self.status.setText(f"Saved {len(result['paths'])} PDFs in {root}:\n" + "\n".join(
                         Path(p).relative_to(root).as_posix() for p in result["paths"]))
+                if result.get("warnings"):
+                    self.status.setText(self.status.text() + "\n" + "\n".join(w["message"] for w in result["warnings"]))
                 self.open_document()
             else:
                 self.status.setText(f"Error: {result['error']['message']}")

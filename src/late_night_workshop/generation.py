@@ -1,7 +1,7 @@
 """Orchestrator: request snapshot -> validated, rendered, published PDFs.
 
-    generate(request, on_progress) -> {"status": "ok", "output_root", "paths", "warnings", "timings"}
-                                    | {"status": "error", "error": envelope}
+    generate(request, on_progress, deps, decide_inputs) -> {"status": "ok", "output_root", "paths", "warnings", "timings"}
+                                    | {"status": "error", "error": envelope} | {"status": "cancelled"}
 
 request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient"}
 Components are passed in through `deps` so each boundary can be swapped for a stub.
@@ -42,7 +42,9 @@ def _subtitle(sources: list[dict]) -> str:
     return f"From {names} · {date.today():%Y-%m-%d}"
 
 
-def generate(request: dict, on_progress=lambda event: None, deps: dict | None = None) -> dict:
+def generate(request: dict, on_progress=lambda event: None, deps: dict | None = None,
+             decide_inputs=None) -> dict:
+    """decide_inputs(decisions) -> {source_id: "process_original" | "cancel"}; missing means cancel."""
     d = {**DEFAULT_DEPS, **(deps or {})}
     timings = {}
 
@@ -65,13 +67,30 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
         progress("preparing", "Checking LaTeX and output folder...")
         d["check_runtime"]()  # before any paid call
         outputs.check_destination(checked["destination"], checked["root"])
-        prep = inputs.prepare_inputs(checked["root"], checked["paths"], request.get("efficient", False),
-                                     gemini_client.get_capabilities())
+        caps = gemini_client.get_capabilities()
+        efficient = bool(request.get("efficient", False))
+        if efficient:
+            progress("preparing", "Converting files to text locally...")
+        prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps)
+        if prep["decisions"]:
+            # Scan / no-text files: the student must choose before anything is sent.
+            progress("awaiting_input", "Waiting for your choice about " +
+                     ", ".join(x["source_id"] for x in prep["decisions"]) + "...")
+            choices = decide_inputs(prep["decisions"]) if decide_inputs else {}
+            pending = [x["source_id"] for x in prep["decisions"]]
+            if any(choices.get(sid) != "process_original" for sid in pending):
+                return {"status": "cancelled", "timings": timings}
+            prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps,
+                                         original_overrides=frozenset(pending))
+            if prep["decisions"]:
+                raise RequestError("needs_original", "Some files still need a decision.")
         sources = prep["sources"]
+        for w in prep["warnings"]:
+            progress("preparing", w["message"])
         task = tasks.resolve_task(request, sources)
         subtitle = _subtitle(sources)
 
-        progress("generating", f"{task['label']}: sending {len(sources)} PDF(s) to Gemini "
+        progress("generating", f"{task['label']}: sending {len(sources)} file(s) to Gemini "
                                f"({gemini_client.model_name()})...")
         response = timed("gemini_s", d["generate_content"], task, sources)
         progress("validating", "Checking Gemini's response...")

@@ -1,37 +1,106 @@
-"""Input preparation. M2: originals only (PDF). Efficient text conversion arrives in M4."""
+"""Input preparation: decide original vs locally extracted text for each selected file.
+
+    prepare_inputs(root, paths, efficient, capabilities, original_overrides=set())
+        -> {"sources": [...], "decisions": [...], "warnings": [...]}
+
+Routing
+  TXT / MD          always text (passed through).
+  Efficient off     original if the client supports its MIME type (PDF); otherwise local
+                    conversion with a warning naming the file; otherwise unsupported_input.
+  Efficient on      local conversion (PDF pages, PPTX slides, DOCX body order).
+  Little text       (PDF: < 40 non-whitespace chars/page on average, or empty pages; other
+                    formats: no text) -> a needs_original decision if the original is supported,
+                    else unsupported_input with an export suggestion. Never sent silently.
+original_overrides holds source IDs the student approved for "Process original" in this job.
+"""
 
 import hashlib
+import mimetypes
 from pathlib import Path
 
-from . import AppError
+from . import AppError, converters
 from .workshops import relative
 
-ORIGINAL_MIME_TYPES = {".pdf": "application/pdf"}
+MIME = {
+    ".pdf": "application/pdf",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".txt": "text/plain", ".md": "text/markdown",
+}
+PASS_THROUGH = {".txt", ".md"}
+SELECTABLE = set(MIME)  # extensions the browser lets students select
+MIN_CHARS_PER_PAGE = 40
 
 
 class InputError(AppError):
     stage = "preparing"
 
 
-def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=None) -> dict:
-    """Selected canonical paths -> {"sources": [...], "decisions": [], "warnings": []}."""
-    if efficient:
-        raise InputError("unsupported_mode", "Efficient mode is not available yet.")
+def _low_text_units(ext: str, units: list[dict]) -> list:
+    if ext == ".pdf":
+        counts = [len("".join(u["text"].split())) for u in units]
+        empty = [u["number"] for u, c in zip(units, counts) if c == 0]
+        if not counts:
+            return [None]
+        if empty or sum(counts) / len(counts) < MIN_CHARS_PER_PAGE:
+            return empty or [u["number"] for u, c in zip(units, counts) if c < MIN_CHARS_PER_PAGE]
+        return []
+    return [] if any(u["text"].strip() for u in units) else [None]
+
+
+def _export_hint(ext: str) -> str:
+    return "Export it as a text-based PDF, DOCX or TXT and select that file instead."
+
+
+def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=None,
+                   original_overrides=frozenset()) -> dict:
     if not selected_paths:
-        raise InputError("no_inputs", "Select at least one PDF first.")
-    allowed = (capabilities or {}).get("original_mime_types") or list(ORIGINAL_MIME_TYPES.values())
-    sources = []
+        raise InputError("no_inputs", "Select at least one file first.")
+    originals_ok = set((capabilities or {}).get("original_mime_types") or [MIME[".pdf"]])
+    sources, decisions, warnings = [], [], []
     for path in selected_paths:
         path = Path(path)
+        ext = path.suffix.lower()
         source_id = relative(root, path)
-        mime = ORIGINAL_MIME_TYPES.get(path.suffix.lower())
-        if mime not in allowed:
-            raise InputError("unsupported_input", f"{source_id}: only PDF files are supported for now.",
-                             source_id=source_id)
+        mime = MIME.get(ext) or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = path.read_bytes()
-        sources.append({
-            "source_id": source_id, "filename": path.name, "relative_path": source_id,
-            "mime_type": mime, "fingerprint": "sha256:" + hashlib.sha256(data).hexdigest(),
-            "mode": "original", "text_parts": [], "original_path": str(path), "size": len(data),
-        })
-    return {"sources": sources, "decisions": [], "warnings": []}
+        record = {"source_id": source_id, "filename": path.name, "relative_path": source_id, "mime_type": mime,
+                  "fingerprint": "sha256:" + hashlib.sha256(data).hexdigest(), "size": len(data),
+                  "mode": "original", "text_parts": [], "original_path": None, "cache": None}
+        can_original = mime in originals_ok and ext not in PASS_THROUGH
+
+        def as_original():
+            record.update(mode="original", original_path=str(path))
+            sources.append(record)
+
+        if source_id in original_overrides and can_original:
+            as_original()
+            continue
+        if not efficient and can_original:
+            as_original()
+            continue
+        if not converters.supported(path):
+            raise InputError("unsupported_input", f"{source_id}: this file type can't be sent to Gemini or "
+                             f"converted locally. {_export_hint(ext)}", source_id=source_id)
+        try:
+            conv = converters.convert(path, data)
+        except converters.ConversionError as e:
+            raise InputError(e.code, f"{source_id}: {e.message}", source_id=source_id)
+        low = _low_text_units(ext, conv["units"])
+        if low:
+            if can_original:
+                decisions.append({"source_id": source_id, "filename": path.name, "code": "needs_original",
+                                  "reason": "little_text", "units": [u for u in low if u is not None],
+                                  "unit_kind": conv["units"][0]["unit"] if conv["units"] else "page",
+                                  "choices": ["process_original", "cancel"]})
+                sources.append(record)  # placeholder; not sent while decisions are unresolved
+                continue
+            raise InputError("unsupported_input", f"{source_id}: no usable text could be extracted, and Gemini "
+                             f"can't take this file type as an original. {_export_hint(ext)}", source_id=source_id)
+        record.update(mode="text", text_parts=conv["units"], cache=conv["cache"])
+        if not efficient and ext not in PASS_THROUGH:
+            warnings.append({"code": "converted_locally", "source_id": source_id,
+                             "message": f"{source_id} was converted to text locally (Gemini doesn't accept "
+                                        f"this file type directly)."})
+        sources.append(record)
+    return {"sources": sources, "decisions": decisions, "warnings": warnings}
