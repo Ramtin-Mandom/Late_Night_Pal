@@ -1,6 +1,6 @@
 # Late Night Pal
 
-A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Gemini. **Current state (M1):** pick one PDF, get a Gemini summary compiled to PDF with local LaTeX, and open it.
+A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Gemini. **Current state (M2):** open a workshop (a local study folder), select PDFs across its subfolders, and generate one combined Summary PDF into the folder you're viewing. It's compiled locally with LaTeX and never overwrites an existing file.
 
 ## Prerequisites (Windows)
 
@@ -33,13 +33,20 @@ A `GEMINI_API_KEY` environment variable works too.
 .venv\Scripts\python -m late_night_workshop
 ```
 
-Click **Choose PDF...**, pick a PDF (for example `Sample_pdf\Note_1.pdf`), then click **Generate summary**. The summary is saved next to the source as `<name> summary.pdf`, or `<name> summary (2).pdf` if that name is taken. It opens automatically when done. A 35-page PDF took about 3 minutes.
+Demo flow:
+
+1. On the start screen, click **Open Workshop** (or **Create Workshop**) and choose a folder. Recent Workshops are remembered in `%LOCALAPPDATA%\late_night_workshop\recents.json`.
+2. Click a folder to open it, and use **Up** to go back. Click a PDF to select it: it turns blue and appears under **Selected Inputs** with its workshop-relative path. Click it again to deselect. The selection stays as you move between folders.
+3. Go to the folder where the result should go, keep **Single file → Summary**, and click **Generate**.
+4. All selected PDFs are sent to Gemini in one request. The result is saved as `summary.pdf` in the current folder, or `summary (2).pdf`, `summary (3).pdf`, and so on if that name is taken. It opens automatically, and **Open document** / **Open output folder** reopen it.
+
+`Sample_pdf\` works as a ready-made workshop. A 35-page PDF took about 3 minutes in M1.
 
 Headless checks:
 
 ```powershell
 .venv\Scripts\python -m late_night_workshop --check                          # resources + LaTeX, no API call
-.venv\Scripts\python -m late_night_workshop --summarize Sample_pdf\Note_1.pdf  # one real API call
+.venv\Scripts\python -m late_night_workshop --summarize Sample_pdf\Note_1.pdf  # one real API call -> Sample_pdf\summary.pdf
 ```
 
 ## Packaging probe (full packaging is M7)

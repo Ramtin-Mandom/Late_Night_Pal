@@ -1,120 +1,296 @@
-"""M1 desktop UI: pick a PDF, summarize it with Gemini, compile locally, open the result.
+"""Late Night Pal desktop UI: workshop start screen, browser + selection, Summary action.
 
-`summarize_file()` is the plain (Qt-free) M1 pipeline, temporary until M2's
-generation.py replaces it; the window runs it on a worker thread.
+The UI owns clicks, highlights and dialogs; `workshops` owns path/selection truth and
+`generation.generate()` (run on a worker thread) owns the job.
 """
 
-from datetime import date
 from pathlib import Path
 
-from . import gemini_client, rendering
+from . import generation, workshops
+
+SELECTED_BG = "#2563eb"  # blue highlight for selected files
+SELECTED_FG = "#ffffff"
 
 
-def summarize_file(pdf_path: str | Path, on_progress=lambda msg: None) -> Path:
-    """PDF -> Gemini summary -> local LaTeX PDF next to the source. Returns the new PDF path."""
-    pdf_path = Path(pdf_path).resolve()
-    on_progress("Checking LaTeX compiler...")
-    rendering.check_runtime()  # before the paid call
-    out = rendering.unique_path(pdf_path.with_name(f"{pdf_path.stem} summary.pdf"))
-    on_progress(f"Sending {pdf_path.name} to Gemini ({gemini_client.model_name()})...")
-    doc = gemini_client.summarize_pdf(pdf_path)
-    on_progress("Compiling PDF locally...")
-    return rendering.render_document(doc, out, subtitle=f"Summary of {pdf_path.name} · {date.today():%Y-%m-%d}")
+def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None) -> dict:
+    """Snapshot taken at Generate time; later browsing cannot change it."""
+    return {
+        "workshop_root": str(state["root"]),
+        "destination": str(state["current"]),
+        "selected_paths": [str(p) for p in workshops.selected_sorted(state)],
+        "task_id": task_id,
+        "parameters": dict(parameters or {}),
+        "efficient": False,
+    }
 
 
 def run_app() -> int:
-    from PySide6.QtCore import QObject, QThread, QUrl, Signal
-    from PySide6.QtGui import QDesktopServices
-    from PySide6.QtWidgets import (QApplication, QFileDialog, QLabel, QMainWindow, QPushButton,
-                                   QVBoxLayout, QWidget)
+    from PySide6.QtCore import QObject, Qt, QThread, QUrl, Signal
+    from PySide6.QtGui import QBrush, QColor, QDesktopServices
+    from PySide6.QtWidgets import (QApplication, QComboBox, QFileDialog, QHBoxLayout, QInputDialog, QLabel,
+                                   QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                                   QStackedWidget, QVBoxLayout, QWidget)
+
+    PATH_ROLE = Qt.UserRole
 
     class Worker(QObject):
         progress = Signal(str)
-        done = Signal(str)
-        failed = Signal(str)
+        finished = Signal(dict)
 
-        def __init__(self, path):
+        def __init__(self, request):
             super().__init__()
-            self.path = path
+            self.request = request
 
         def run(self):
             try:
-                self.done.emit(str(summarize_file(self.path, self.progress.emit)))
-            except (gemini_client.GeminiError, rendering.RenderError) as e:
-                self.failed.emit(e.message + (f"\n{e.details}" if getattr(e, "details", "") else ""))
-            except OSError as e:
-                self.failed.emit(f"File error: {e.strerror or e}")
-            except Exception as e:
-                self.failed.emit(f"Unexpected error ({type(e).__name__}).")
+                result = generation.generate(self.request, lambda ev: self.progress.emit(ev["message"]))
+            except Exception as e:  # last-resort guard so the UI never hangs in "running"
+                result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
+            self.finished.emit(result)
 
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
             self.setWindowTitle("Late Night Pal")
-            self.pdf = None
-            self.result = None
+            self.state = None
             self.thread = None
-            self.pick_btn = QPushButton("Choose PDF...")
-            self.file_lbl = QLabel("No file selected")
-            self.go_btn = QPushButton("Generate summary")
+            self.worker = None
+            self.last_paths = []
+            self.stack = QStackedWidget()
+            self.stack.addWidget(self._start_page())
+            self.stack.addWidget(self._workshop_page())
+            self.setCentralWidget(self.stack)
+            self.resize(900, 600)
+            self.show_start()
+
+        # ---------- start screen ----------
+        def _start_page(self):
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            title = QLabel("Welcome to Late Night Pal")
+            title.setStyleSheet("font-size: 20px; font-weight: 600;")
+            lay.addWidget(title)
+            lay.addWidget(QLabel("Recent Workshops"))
+            self.recent_list = QListWidget()
+            self.recent_list.itemClicked.connect(self.open_recent)
+            lay.addWidget(self.recent_list)
+            row = QHBoxLayout()
+            self.open_btn = QPushButton("Open Workshop")
+            self.create_btn = QPushButton("Create Workshop")
+            self.open_btn.clicked.connect(self.open_workshop_dialog)
+            self.create_btn.clicked.connect(self.create_workshop_dialog)
+            row.addWidget(self.open_btn)
+            row.addWidget(self.create_btn)
+            lay.addLayout(row)
+            return page
+
+        def show_start(self):
+            self.recent_list.clear()
+            recents = workshops.load_recents()
+            for r in recents:
+                item = QListWidgetItem(r["path"] if r["exists"] else f"{r['path']}  (missing)")
+                item.setData(PATH_ROLE, r["path"])
+                if not r["exists"]:
+                    item.setForeground(QBrush(QColor("#888888")))
+                self.recent_list.addItem(item)
+            if not recents:
+                self.recent_list.addItem(QListWidgetItem("No recent workshops yet."))
+            self.stack.setCurrentIndex(0)
+
+        def ask_folder(self, caption):
+            return QFileDialog.getExistingDirectory(self, caption)
+
+        def ask_name(self):
+            name, ok = QInputDialog.getText(self, "Create Workshop", "Workshop folder name:")
+            return name.strip() if ok else ""
+
+        def open_recent(self, item):
+            path = item.data(PATH_ROLE)
+            if not path:
+                return
+            if Path(path).is_dir():
+                return self.enter_workshop(workshops.open_workshop(path))
+            box = QMessageBox(QMessageBox.Warning, "Workshop not found",
+                              f"This workshop folder no longer exists:\n{path}", parent=self)
+            locate = box.addButton("Open another folder...", QMessageBox.AcceptRole)
+            remove = box.addButton("Remove from list", QMessageBox.DestructiveRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            if box.clickedButton() is remove:
+                workshops.remove_recent(path)
+                self.show_start()
+            elif box.clickedButton() is locate:
+                self.open_workshop_dialog()
+
+        def open_workshop_dialog(self):
+            folder = self.ask_folder("Open Workshop")
+            if folder:
+                self.enter_workshop(workshops.open_workshop(folder))
+
+        def create_workshop_dialog(self):
+            parent = self.ask_folder("Choose where to create the workshop")
+            if not parent:
+                return
+            name = self.ask_name()
+            if not name:
+                return
+            try:
+                self.enter_workshop(workshops.create_workshop(Path(parent) / name))
+            except (workshops.WorkshopError, OSError) as e:
+                QMessageBox.warning(self, "Create Workshop", getattr(e, "message", str(e)))
+
+        # ---------- workshop screen ----------
+        def _workshop_page(self):
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            top = QHBoxLayout()
+            self.back_btn = QPushButton("< Workshops")
+            self.back_btn.clicked.connect(self.show_start)
+            self.root_lbl = QLabel()
+            top.addWidget(self.back_btn)
+            top.addWidget(self.root_lbl, 1)
+            lay.addLayout(top)
+
+            body = QHBoxLayout()
+            left = QVBoxLayout()
+            nav = QHBoxLayout()
+            self.up_btn = QPushButton("Up")
+            self.up_btn.clicked.connect(self.go_up)
+            self.folder_lbl = QLabel()
+            nav.addWidget(self.up_btn)
+            nav.addWidget(self.folder_lbl, 1)
+            left.addLayout(nav)
+            self.browser = QListWidget()
+            self.browser.itemClicked.connect(self.browser_clicked)
+            left.addWidget(self.browser)
+            left.addWidget(QLabel("Click a folder to open it; click a PDF to select or deselect it."))
+            body.addLayout(left, 3)
+
+            right = QVBoxLayout()
+            self.selected_lbl = QLabel("Selected Inputs (0)")
+            right.addWidget(self.selected_lbl)
+            self.selected_list = QListWidget()
+            right.addWidget(self.selected_list)
+            right.addWidget(QLabel("Output type"))
+            self.output_type = QComboBox()
+            self.output_type.addItem("Single file")
+            right.addWidget(self.output_type)
+            right.addWidget(QLabel("Task"))
+            self.task_box = QComboBox()
+            self.task_box.addItem("Summary", "summary")
+            right.addWidget(self.task_box)
+            self.generate_btn = QPushButton("Generate")
+            self.generate_btn.clicked.connect(self.generate)
+            right.addWidget(self.generate_btn)
             self.status = QLabel("")
             self.status.setWordWrap(True)
-            self.open_btn = QPushButton("Open summary PDF")
-            self.go_btn.setEnabled(False)
-            self.open_btn.setEnabled(False)
-            layout = QVBoxLayout()
-            for w in (self.pick_btn, self.file_lbl, self.go_btn, self.status, self.open_btn):
-                layout.addWidget(w)
-            box = QWidget()
-            box.setLayout(layout)
-            self.setCentralWidget(box)
-            self.resize(480, 220)
-            self.pick_btn.clicked.connect(self.pick)
-            self.go_btn.clicked.connect(self.generate)
-            self.open_btn.clicked.connect(self.open_result)
+            self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            right.addWidget(self.status)
+            row = QHBoxLayout()
+            self.open_doc_btn = QPushButton("Open document")
+            self.open_folder_btn = QPushButton("Open output folder")
+            self.open_doc_btn.clicked.connect(self.open_document)
+            self.open_folder_btn.clicked.connect(self.open_output_folder)
+            row.addWidget(self.open_doc_btn)
+            row.addWidget(self.open_folder_btn)
+            right.addLayout(row)
+            body.addLayout(right, 2)
+            lay.addLayout(body)
+            return page
 
-        def pick(self):
-            path, _ = QFileDialog.getOpenFileName(self, "Choose a PDF", "", "PDF files (*.pdf)")
-            if path:
-                self.pdf = path
-                self.file_lbl.setText(path)
-                self.go_btn.setEnabled(True)
+        def enter_workshop(self, state):
+            self.state = state
+            self.last_paths = []
+            self.status.setText("")
+            self.root_lbl.setText(f"Workshop: {state['root']}")
+            self.refresh()
+            self.stack.setCurrentIndex(1)
 
+        def refresh(self, folder=None):
+            entries = workshops.browse(self.state, folder)
+            rel = workshops.relative(self.state, self.state["current"])
+            self.folder_lbl.setText(f"Current folder: {'/' if rel == '.' else rel}")
+            self.up_btn.setEnabled(self.state["current"] != self.state["root"])
+            self.browser.clear()
+            for e in entries:
+                is_pdf = not e["is_dir"] and e["path"].suffix.lower() == ".pdf"
+                item = QListWidgetItem(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
+                item.setData(PATH_ROLE, str(e["path"]))
+                item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else ("pdf" if is_pdf else "other"))
+                if e["selected"]:
+                    item.setBackground(QBrush(QColor(SELECTED_BG)))
+                    item.setForeground(QBrush(QColor(SELECTED_FG)))
+                elif not e["is_dir"] and not is_pdf:
+                    item.setForeground(QBrush(QColor("#888888")))
+                    item.setToolTip("Only PDF files can be selected for now.")
+                self.browser.addItem(item)
+            self.browser.clearSelection()  # selection is shown by the blue background, not Qt's selection
+            self.refresh_selected()
+
+        def refresh_selected(self):
+            rels = [workshops.relative(self.state, p) for p in workshops.selected_sorted(self.state)]
+            self.selected_list.clear()
+            self.selected_list.addItems(rels)
+            self.selected_lbl.setText(f"Selected Inputs ({len(rels)})")
+            self.generate_btn.setEnabled(bool(rels) and self.thread is None)
+            self.open_doc_btn.setEnabled(bool(self.last_paths))
+            self.open_folder_btn.setEnabled(bool(self.last_paths))
+
+        def browser_clicked(self, item):
+            kind, path = item.data(PATH_ROLE + 1), item.data(PATH_ROLE)
+            try:
+                if kind == "dir":
+                    self.refresh(path)
+                elif kind == "pdf":
+                    workshops.toggle_selection(self.state, path)
+                    self.refresh()
+            except workshops.WorkshopError as e:
+                self.status.setText(f"Error: {e.message}")
+
+        def go_up(self):
+            if self.state["current"] != self.state["root"]:
+                self.refresh(self.state["current"].parent)
+
+        # ---------- generation ----------
         def generate(self):
-            self.go_btn.setEnabled(False)
-            self.pick_btn.setEnabled(False)
-            self.open_btn.setEnabled(False)
+            if self.thread is not None or not self.state["selected"]:
+                return  # duplicate click while running
+            request = build_request(self.state, self.task_box.currentData())
+            self.generate_btn.setEnabled(False)
+            self.last_paths = []
+            self.status.setText("Starting...")
             self.thread = QThread()
-            self.worker = Worker(self.pdf)
+            self.worker = Worker(request)
             self.worker.moveToThread(self.thread)
             self.thread.started.connect(self.worker.run)
             self.worker.progress.connect(self.status.setText)
-            self.worker.done.connect(self.succeeded)
-            self.worker.failed.connect(self.errored)
-            for sig in (self.worker.done, self.worker.failed):
-                sig.connect(self.thread.quit)
+            self.worker.finished.connect(self.job_finished)
             self.thread.start()
 
-        def _finish(self):
-            self.go_btn.setEnabled(True)
-            self.pick_btn.setEnabled(True)
+        def job_finished(self, result):
+            # quit() before wait(): a queued quit would only run after this slot returns (deadlock)
+            self.thread.quit()
+            self.thread.wait()
+            self.thread = None
+            if result["status"] == "ok":
+                self.last_paths = result["paths"]
+                self.status.setText("Saved: " + "\n".join(result["paths"]))
+                self.open_document()
+            else:
+                self.status.setText(f"Error: {result['error']['message']}")
+            if self.state:
+                self.refresh()  # show the new file; selection is unchanged either way
 
-        def succeeded(self, path):
-            self._finish()
-            self.result = path
-            self.status.setText(f"Saved: {path}")
-            self.open_btn.setEnabled(True)
-            self.open_result()
+        def open_document(self):
+            if self.last_paths:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_paths[0]))
 
-        def errored(self, message):
-            self._finish()
-            self.status.setText(f"Error: {message}")
-
-        def open_result(self):
-            if self.result:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(self.result))
+        def open_output_folder(self):
+            if self.last_paths:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(self.last_paths[0]).parent)))
 
     app = QApplication.instance() or QApplication([])
+    app.setApplicationName("Late Night Pal")
     win = Window()
     win.show()
     return app.exec()

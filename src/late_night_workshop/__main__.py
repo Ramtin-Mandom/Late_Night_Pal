@@ -1,11 +1,13 @@
-"""Entry point: `python -m late_night_workshop` starts the desktop app.
+"""Entry point: `python -m late_night_workshop` starts the Late Night Pal desktop app.
 
   --check            headless preflight: packaged resources + LaTeX compiler (no API call)
-  --summarize FILE   headless run of the same PDF -> Gemini -> PDF path (makes one API call)
+  --summarize FILE   headless Summary of one PDF through the shared pipeline (one API call);
+                     the PDF's folder is the workshop and destination, output is summary.pdf
 """
 
 import argparse
 import sys
+from pathlib import Path
 
 from . import resource_path
 
@@ -34,15 +36,21 @@ def main() -> int:
         return 0 if ok else 1
 
     if args.summarize:
-        from . import gemini_client, rendering, ui
-        try:
-            print(ui.summarize_file(args.summarize, print))
+        from . import generation
+        pdf = Path(args.summarize).resolve()
+        result = generation.generate(
+            {"workshop_root": str(pdf.parent), "destination": str(pdf.parent), "selected_paths": [str(pdf)],
+             "task_id": "summary", "parameters": {}, "efficient": False},
+            lambda ev: print(ev["message"]),
+        )
+        if result["status"] == "ok":
+            print(result["paths"][0])
             return 0
-        except (gemini_client.GeminiError, rendering.RenderError) as e:
-            print(f"error [{e.code}]: {e.message}", file=sys.stderr)
-            if getattr(e, "details", ""):
-                print(e.details, file=sys.stderr)
-            return 1
+        err = result["error"]
+        print(f"error [{err['code']}]: {err['message']}", file=sys.stderr)
+        if err["details"].get("log"):
+            print(err["details"]["log"], file=sys.stderr)
+        return 1
 
     from . import ui
     return ui.run_app()
