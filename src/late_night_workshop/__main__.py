@@ -47,10 +47,15 @@ def main() -> int:
         from . import rendering, tasks
         ok = True
         rels = [t["prompt_file"] for t in tasks.TASKS.values()] + ["prompts/" + s for s in tasks.STYLES.values()]
-        for rel in rels + ["prompts/format.md", "templates/document.tex", "templates/cheat-sheet.tex"]:
+        from .ui import BIN_ICON
+        for rel in rels + ["prompts/format.md", "templates/document.tex", "templates/cheat-sheet.tex", BIN_ICON]:
             found = resource_path(rel).is_file()
             ok &= found
             print(f"resource {rel}: {'ok' if found else 'MISSING'}")
+        from PySide6.QtGui import QImageReader  # the bin icon is SVG: Qt's qsvg plugin must be bundled
+        svg = b"svg" in [bytes(f) for f in QImageReader.supportedImageFormats()]
+        ok &= svg
+        print(f"svg icons: {'ok' if svg else 'MISSING (qsvg plugin)'}")
         try:
             print(f"latex: {rendering.check_runtime()['compiler']}")
         except rendering.RenderError as e:

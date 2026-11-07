@@ -26,4 +26,4 @@ late-night-workshop = "late_night_workshop.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-late_night_workshop = ["prompts/*.md", "prompts/styles/*.md", "templates/*.tex"]
+late_night_workshop = ["prompts/*.md", "prompts/styles/*.md", "templates/*.tex", "assets/*.svg"]

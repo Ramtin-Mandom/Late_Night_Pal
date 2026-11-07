@@ -565,6 +565,9 @@ def run_app() -> int:
                 item = QListWidgetItem()
                 item.setData(PATH_ROLE, path)
                 item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else "file")
+                # Row widgets are invisible to screen readers/UI Automation; name the item itself.
+                item.setData(Qt.AccessibleTextRole, ("Folder " if e["is_dir"] else "File ") + e["name"]
+                             + (", selected" if e["selected"] else ""))
                 row = QWidget()
                 hl = QHBoxLayout(row)
                 hl.setContentsMargins(4, 0, 4, 0)
@@ -608,6 +611,8 @@ def run_app() -> int:
                 folders += p.is_dir()
                 kind = "[folder] " if p.is_dir() else ("[missing] " if not exists else "")
                 item = QListWidgetItem()
+                item.setData(PATH_ROLE, str(p))
+                item.setData(Qt.AccessibleTextRole, f"Selected {kind}{rel}")
                 row = QWidget()
                 hl = QHBoxLayout(row)
                 hl.setContentsMargins(4, 0, 4, 0)
