@@ -70,6 +70,19 @@ Debug first: drop one document from a fixture bundle → `invalid_response` nami
 
 `generation.py` · `generate(request, on_progress, deps)` returns `{status, output_root, paths, warnings, timings: {gemini_s, render_s, publish_s}, documents: [{document_id, page_count, render_s}]}` or `{status: "error", error: envelope}`. `deps` swaps `check_runtime` / `generate_content` / `render_bundle` / `publish` for stubs. `decide_inputs(decisions) -> {source_id: "process_original"|"cancel"}`: anything other than process_original for every pending source returns `{status: "cancelled"}` before any API call; otherwise preparation reruns with those `original_overrides`. Without a `decide_inputs` callback (the CLI), the job is cancelled. Bounded recovery: `ask_gemini` retries once only after `api_network` (quota, auth and limit errors are not retried). `validated` sends one `REPAIR_PROMPT` request (the problem, the task prompt and the previous JSON, without re-sending sources) and fails with "… (also after one repair attempt)". If `page_limit_exceeded`, one `CONDENSE_PROMPT` request is sent, revalidated without further repair and re-rendered; if it still overflows, the job fails with nothing published. `RenderError compile_failed` and publish errors are returned directly, with no Gemini call. Rendering happens in a `TemporaryDirectory` that is always removed. `__init__.py` · `AppError` subclasses give `{code, stage, message, source_id, retryable, details}`.
 
+## Organizer and downloads (Phase 2, P2-M1: planning and discovery only)
+
+Not wired into the UI yet; no organizer code moves, copies or deletes files. Selection contract and the remaining rules are in `components.md`.
+
+| File or symbol | What it does |
+| --- | --- |
+| `organizing.py` · `capture_request(state, action, parameters)` | Click-time snapshot `{action, workshop_root, destination, sources, parameters}`, like `ui.build_request` |
+| `organizing.py` · `plan_action(request)` | Validates the whole request and returns `{action, root, destination, create_folder, items: [{source, destination, kind}]}`, or raises `OrganizeError` (`code`, `.paths`) before any change. Only `wrap` is planned (new folder under the captured current folder); other actions raise `not_implemented`. Shared preflight: raw folder-name check before `tasks.safe_folder_name`, root/outside/missing sources, symlinks and junctions, selected descendants dropped, folder into itself, case-insensitive name clashes, existing destination |
+| `organizing.py` · `outcome(item, status, change, error)`, `preview(plan)` | Per-item executor record (completed / failed / unattempted; `copied_source_kept` when the copy succeeded but source removal failed) for P2-M3; relative `src -> dst` lines |
+| `downloads.py` · `chrome_records(profile_dir)` | Read-only Chrome `History.downloads`: `target_path`, `end_time` (µs since 1601 UTC), `state == 1` only → `{path, downloaded_at, timestamp_source}` |
+| `python -m late_night_workshop.downloads` | Probe; prints only completed files named `lnp-probe-*` (`--match`) plus excluded counts by state |
+| `tests/test_organizing.py`, `tests/chrome_download_probe.py` | Wrap planning fixture (`python -m unittest tests.test_organizing -v`); manual disposable-profile Chrome harness (results recorded in `components.md` → Downloads) |
+
 ## Packaging
 
 | File or symbol | What it does |
