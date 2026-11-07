@@ -46,21 +46,27 @@ def escape(text: str) -> str:
     return "".join(_ESCAPES.get(ch, ch) for ch in str(text))
 
 
+def one_line(text) -> str:
+    """Headings, titles and labels sit inside command arguments, where a blank line is a LaTeX error."""
+    return " ".join(str(text).split())
+
+
 def blocks_to_latex(blocks: list[dict], compact: bool = False) -> str:
     section = r"\textbf" if compact else r"\section*"
     out = []
     for block in blocks:
         kind = block.get("kind")
         if kind == "heading":
-            out.append(f"{section}{{{escape(block.get('text', ''))}}}" + (r"\par" if compact else ""))
+            out.append(f"{section}{{{escape(one_line(block.get('text', '')))}}}" + (r"\par" if compact else ""))
         elif kind == "paragraph":
             out.append(escape(block.get("text", "")) + "\n")
         elif kind == "list":
             items = [i for i in block.get("items", []) if str(i).strip()]
             if items:
-                out.append("\\begin{itemize}\n" + "\n".join(f"\\item {escape(i)}" for i in items) + "\n\\end{itemize}")
+                # `\item{}` so an item starting with `[` (e.g. "[ ] Define ...") is text, not \item's optional label
+                out.append("\\begin{itemize}\n" + "\n".join(f"\\item{{}} {escape(i)}" for i in items) + "\n\\end{itemize}")
         elif kind == "question":
-            out.append(f"\\noindent\\textbf{{{escape(block.get('label', ''))}}}\\quad {escape(block.get('text', ''))}\\par")
+            out.append(f"\\noindent\\textbf{{{escape(one_line(block.get('label', '')))}}}\\quad {escape(block.get('text', ''))}\\par")
         else:
             raise RenderError("invalid_block", f"Unsupported content block: {kind!r}")
     return "\n\n".join(out)
@@ -78,7 +84,7 @@ def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = 
     tex = resource_path(f"templates/{template}.tex").read_text(encoding="utf-8")
     size, leading = font or CHEAT_SHEET_SIZES[0]
     tex = (tex.replace("<<FONTSIZE>>", str(size)).replace("<<LEADING>>", str(leading))
-              .replace("<<TITLE>>", escape(document.get("title") or "Document"))
+              .replace("<<TITLE>>", escape(one_line(document.get("title") or "Document")))
               .replace("<<SUBTITLE>>", escape(subtitle))
               .replace("<<BODY>>", blocks_to_latex(document.get("blocks", []), compact=template == "cheat-sheet")))
     work_dir = Path(work_dir)
