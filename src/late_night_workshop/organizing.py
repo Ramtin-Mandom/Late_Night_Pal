@@ -1,8 +1,9 @@
 """Organizer: click-time request -> validated plan -> executed per-item outcomes.
 
-P2-M3: Wrap, Rip, Delete (Recycle Bin), Copy (file clipboard) and Paste (copy, or an external cut
-tracked per item). Super Wrap planning belongs to P2-M4. Only execute_plan() and the adapters at
-the bottom change files; planners only read.
+Wrap, Super Wrap, Rip, Delete (Recycle Bin), Copy (file clipboard) and Paste (copy, or an external
+cut tracked per item). Only execute_plan() and the adapters at the bottom change files; planners only
+read. The executor runs generic operations (create folders, then move/copy/recycle/rmdir items) and
+never knows which action produced them; Super Wrap's grouping lives in super_wrap.py.
 
 Request (built on the UI thread at click time by capture_request; later navigation cannot redirect it):
     {"action": str, "workshop_root": str, "destination": str, "sources": [str], "parameters": dict}
@@ -10,7 +11,8 @@ Request (built on the UI thread at click time by capture_request; later navigati
     - Paste {"clipboard": {"paths": [str], "effect": "copy"|"cut"}} read by clipboard_read()
 
 Plan (plan_action; raises OrganizeError naming the conflicting paths before any mutation):
-    {"action", "root", "destination", "create_folder": str|None, "items": [
+    {"action", "root", "destination", "create_folder": str|None, "create_folders": [str] (parents first),
+     "items": [
         {"source", "destination": str|None, "kind": "file"|"dir", "op": move|copy|cut|recycle|rmdir|clipboard,
          "identity": {is_dir, size, mtime_ns}}], "batch_id"?, "skipped"?}
 
@@ -31,7 +33,7 @@ import os
 import shutil
 from pathlib import Path
 
-from . import AppError, tasks, workshops
+from . import AppError, super_wrap, tasks, workshops
 
 ACTIONS = ("delete", "rip", "wrap", "copy", "paste", "super_wrap")
 STATUSES = ("completed", "failed", "unattempted")
@@ -170,17 +172,53 @@ def _plan(action, root, dest, items, **extra) -> dict:
             "create_folder": None, "items": items, **extra}
 
 
-def _plan_wrap(root: Path, request: dict) -> dict:
+def _new_folder(root: Path, request: dict) -> tuple[Path, list[Path], Path]:
+    """Shared Wrap/Super Wrap start: raw name, destination, sources, and a folder name not yet taken."""
     name = check_folder_name(request["parameters"].get("folder_name"))
     dest = preflight_destination(root, request["destination"])
     sources = preflight_sources(root, request["sources"])
     folder = dest / name
     if os.path.lexists(folder) or any(c.name.lower() == name.lower() for c in dest.iterdir()):
         raise OrganizeError("destination_exists", f"'{name}' already exists in {dest.name}. Choose another name.", [folder])
+    return dest, sources, folder
+
+
+def _plan_wrap(root: Path, request: dict) -> dict:
+    dest, sources, folder = _new_folder(root, request)
     items = [_item(p, folder / p.name, "move") for p in sources]
     check_not_into_self(items)
     check_unique_targets(items)
-    return _plan("wrap", root, dest, items, create_folder=str(folder))
+    return _plan("wrap", root, dest, items, create_folder=str(folder), create_folders=[str(folder)])
+
+
+def _plan_super_wrap(root: Path, request: dict) -> dict:
+    """Files are grouped by super_wrap.group(); selected folders move intact as opaque entries.
+    The whole tree (new folders and every destination) is checked before anything changes."""
+    dest, sources, outer = _new_folder(root, request)
+    files = [p for p in sources if not p.is_dir()]
+    dirs = [p for p in sources if p.is_dir()]
+    parts, folders = super_wrap.group([p.name for p in files])
+    for p, rel in zip(files, parts):
+        for generated in rel[:-1] + ((rel[-1],) if rel[-1] != p.name else ()):
+            try:
+                check_folder_name(generated)
+            except OrganizeError:
+                raise OrganizeError("invalid_name", f"Super Wrap would create the name '{generated}' from {p.name}, "
+                                    "which Windows does not allow. Rename the file first.", [p]) from None
+    items = [_item(p, outer.joinpath(*rel), "move") for p, rel in zip(files, parts)]
+    items += [_item(d, outer / d.name, "move") for d in dirs]
+    created = [outer] + [outer.joinpath(*f) for f in folders]
+    seen, clash = {}, []  # every planned file, moved folder and new folder must be distinct, ignoring case
+    for path, owner in [(str(c), "new folder") for c in created[1:]] + [(i["destination"], i["source"]) for i in items]:
+        k = os.path.normcase(path)
+        if k in seen:
+            clash += [seen[k], owner]
+        seen[k] = owner if owner != "new folder" else path
+    if clash:
+        raise OrganizeError("name_conflict", "Super Wrap would give two entries the same name (Windows ignores case), "
+                            "so nothing was moved. Rename or deselect one of these:", sorted(set(clash)))
+    check_not_into_self(items)
+    return _plan("super_wrap", root, dest, items, create_folder=str(outer), create_folders=[str(c) for c in created])
 
 
 def _plan_rip(root: Path, request: dict) -> dict:
@@ -324,8 +362,8 @@ def _plan_cut_retry(root: Path, dest: Path, bid: str, record: dict) -> dict:
     return _plan("paste", root, dest, items, batch_id=bid, skipped=skipped)
 
 
-_PLANNERS = {"wrap": _plan_wrap, "rip": _plan_rip, "delete": _plan_delete, "copy": _plan_copy, "paste": _plan_paste}
-_OWNER = {"super_wrap": "P2-M4"}
+_PLANNERS = {"wrap": _plan_wrap, "super_wrap": _plan_super_wrap, "rip": _plan_rip, "delete": _plan_delete,
+             "copy": _plan_copy, "paste": _plan_paste}
 
 
 def plan_action(request: dict) -> dict:
@@ -333,8 +371,6 @@ def plan_action(request: dict) -> dict:
     action = request.get("action")
     if action not in ACTIONS:
         raise OrganizeError("unknown_action", f"Unknown action '{action}'.")
-    if action not in _PLANNERS:
-        raise OrganizeError("not_implemented", f"{action} arrives in {_OWNER[action]}.")
     root = Path(request["workshop_root"]).resolve()
     if not root.is_dir():
         raise OrganizeError("missing_workshop", f"Workshop folder not found: {root}", [root])
@@ -454,11 +490,11 @@ def execute_plan(plan: dict, ops: dict | None = None) -> dict:
                     "batch_id": plan["batch_id"], "skipped": [],
                     "outcomes": [outcome(i, "unattempted") for i in plan["items"]],
                     "error": {"code": "unsafe_cut", "message": f"Could not save the move record ({e}); nothing was moved."}}
-    folder = plan.get("create_folder")
+    folders = plan.get("create_folders") or ([plan["create_folder"]] if plan.get("create_folder") else [])
     failed = False
     try:
-        if folder:
-            os.mkdir(folder)  # Wrap: FileExistsError if something appeared since planning
+        for folder in folders:  # parents first; FileExistsError if something appeared since planning
+            os.mkdir(folder)
             created.append(folder)
     except OSError as e:
         failed = True
@@ -495,13 +531,14 @@ def execute_plan(plan: dict, ops: dict | None = None) -> dict:
                 save_cut_record(plan["batch_id"], cut_record)
             except OSError:
                 pass  # the item already happened; the report still says exactly what changed
-    if folder and created and not any(o["status"] == "completed" for o in outcomes):
-        try:
-            os.rmdir(folder)  # remove only the empty folder this run created
-            created.remove(folder)
-        except OSError:
-            pass
     done = sum(o["status"] == "completed" for o in outcomes)
+    if done < len(outcomes):
+        for folder in reversed(list(created)):  # remove only folders this run created that stayed empty
+            try:
+                os.rmdir(folder)
+                created.remove(folder)
+            except OSError:
+                pass
     status = "ok" if done == len(outcomes) else ("partial" if done else "failed")
     return {"action": plan["action"], "status": status, "outcomes": outcomes, "created": created,
             "removed": removed, "batch_id": plan.get("batch_id"), "skipped": plan.get("skipped", [])}

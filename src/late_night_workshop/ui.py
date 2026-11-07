@@ -14,8 +14,7 @@ SELECTED_FG = "#ffffff"
 ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("copy", "Copy"), ("paste", "Paste"),
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
-SUPER_WRAP_PENDING = "Super Wrap arrives in P2-M4."
-ACTION_VERB = {"wrap": "Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
+ACTION_VERB = {"wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -314,8 +313,7 @@ def run_app() -> int:
             for action, label in ORGANIZE_ACTIONS:
                 b = QPushButton(label)
                 if action == "super_wrap":
-                    b.setEnabled(False)
-                    b.setToolTip(SUPER_WRAP_PENDING)
+                    b.setToolTip("Wrap into a new folder, grouping files by shared name parts such as Cal_1_...")
                 b.clicked.connect(lambda _=False, a=action: self.organize(a))
                 self.action_btns[action] = b
                 grid.addWidget(b)
@@ -511,7 +509,7 @@ def run_app() -> int:
             busy = self.thread is not None or self.org_thread is not None
             self.generate_btn.setEnabled(status["ok"] and not busy)
             for action, b in self.action_btns.items():
-                b.setEnabled(action != "super_wrap" and not busy)
+                b.setEnabled(not busy)
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
 
@@ -548,8 +546,8 @@ def run_app() -> int:
             if self.org_thread is not None or self.thread is not None:
                 return
             request = organizing.capture_request(self.state, action)  # snapshot before any dialog
-            if action == "wrap":
-                name, ok = QInputDialog.getText(self, "Wrap", "New folder name (created in the current folder):")
+            if action in ("wrap", "super_wrap"):
+                name, ok = QInputDialog.getText(self, ACTION_VERB[action], "New folder name (created in the current folder):")
                 request["parameters"]["folder_name"] = name if ok else None
             elif action == "paste":
                 request["parameters"]["clipboard"] = organizing.clipboard_read()
@@ -565,10 +563,11 @@ def run_app() -> int:
                                     "Paste here or in File Explorer; nothing was copied yet.")
                 return
             lines = organizing.preview(plan)
-            if action == "delete" or plan.get("batch_id"):
-                title = "Delete" if action == "delete" else "Move (cut) into this folder"
-                text = (f"Send {len(lines)} item(s) to the Recycle Bin?" if action == "delete"
-                        else f"Move {len(lines)} item(s) here? Their originals will be removed.")
+            if action in ("delete", "super_wrap") or plan.get("batch_id"):
+                title = {"delete": "Delete", "super_wrap": "Super Wrap"}.get(action, "Move (cut) into this folder")
+                text = {"delete": f"Send {len(lines)} item(s) to the Recycle Bin?",
+                        "super_wrap": f"Move {len(lines)} item(s) into this grouped layout?"}.get(
+                    action, f"Move {len(lines)} item(s) here? Their originals will be removed.")
                 if plan.get("skipped"):
                     text += f" ({len(plan['skipped'])} already moved earlier will be skipped.)"
                 shown = "\n".join(lines[:15]) + (f"\n... and {len(lines) - 15} more" if len(lines) > 15 else "")

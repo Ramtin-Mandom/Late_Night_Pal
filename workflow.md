@@ -29,7 +29,7 @@ Each button snapshots root, current folder and selection at the click (`organizi
 4. Select `a (2).pdf`, **Delete**, confirm → it goes to the Recycle Bin. If the drive has no Recycle Bin, nothing is deleted.
 5. Cut files in File Explorer, then **Paste** here and confirm. If an item fails, the status shows which moved, which failed and which were not attempted; the rest stay where they were. Paste the same cut again to finish: moved items are skipped. Network (UNC) sources are refused for cut; copy them instead.
 
-Super Wrap is disabled until P2-M4.
+6. Select `Cal_1_assignment_1.pdf`, `Cal_1_Note_1.pdf`, `Cal_1_assignment_2.pdf` (and optionally `Cal_2_assignment_1.pdf` or a folder), open the destination folder, **Super Wrap**, name `Calculus`. The confirmation lists every source → destination. The result is `Calculus/Cal_1/assignment/1.pdf` and `2.pdf`, `Calculus/Cal_1/Note_1.pdf`, and singletons and folders directly in `Calculus` with their names unchanged. A name clash anywhere in the new tree, or a name Windows forbids, refuses the whole run before anything moves.
 
 ## 3. Choose a task and parameters
 
