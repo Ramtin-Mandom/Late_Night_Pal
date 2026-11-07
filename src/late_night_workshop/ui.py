@@ -7,14 +7,15 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 import threading
 from pathlib import Path
 
-from . import generation, inputs, organizing, tasks, workshops
+from . import generation, inputs, name_tags, organizing, tasks, workshops
 
 SELECTED_BG = "#2563eb"  # blue highlight for selected entries
 SELECTED_FG = "#ffffff"
 ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("copy", "Copy"), ("paste", "Paste"),
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
-ACTION_VERB = {"wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
+TAG_MIME = "application/x-late-night-pal-tag"
+ACTION_VERB = {"rename": "Name tag", "wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -113,8 +114,8 @@ def describe_outcomes(result: dict) -> str:
 
 
 def run_app() -> int:
-    from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal
-    from PySide6.QtGui import QBrush, QColor, QDesktopServices
+    from PySide6.QtCore import QMimeData, QObject, Qt, QThread, QTimer, QUrl, Signal
+    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
                                    QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
@@ -164,6 +165,46 @@ def run_app() -> int:
             result["root"] = self.plan["root"]
             self.finished.emit(result)
 
+    class TagBrowser(QListWidget):
+        """Folder browser that accepts a name-tag chip dropped on a row."""
+        tag_dropped = Signal(str, str)  # tag, path of the row ("" for empty space)
+
+        def __init__(self):
+            super().__init__()
+            self.setAcceptDrops(True)
+            self.viewport().setAcceptDrops(True)
+
+        def dragEnterEvent(self, e):
+            e.acceptProposedAction() if e.mimeData().hasFormat(TAG_MIME) else e.ignore()
+
+        def dragMoveEvent(self, e):
+            e.acceptProposedAction() if e.mimeData().hasFormat(TAG_MIME) else e.ignore()
+
+        def dropEvent(self, e):
+            if not e.mimeData().hasFormat(TAG_MIME):
+                return e.ignore()
+            item = self.itemAt(e.position().toPoint())
+            e.acceptProposedAction()
+            self.tag_dropped.emit(bytes(e.mimeData().data(TAG_MIME)).decode("utf-8"),
+                                  item.data(PATH_ROLE) if item else "")
+
+    class TagChip(QPushButton):
+        """A draggable chip; dragging copies the tag name, the chip itself stays."""
+
+        def __init__(self, tag):
+            super().__init__(tag)
+            self.tag = tag
+            self.setAccessibleName(f"Tag {tag}; drag onto a file to rename it {tag}_N")
+            self.setToolTip(f"Drag onto a file to rename it {tag}_1, {tag}_2, ...")
+
+        def mouseMoveEvent(self, e):
+            if e.buttons() & Qt.LeftButton:
+                md = QMimeData()
+                md.setData(TAG_MIME, self.tag.encode("utf-8"))
+                drag = QDrag(self)
+                drag.setMimeData(md)
+                drag.exec(Qt.CopyAction)
+
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
@@ -173,6 +214,9 @@ def run_app() -> int:
             self.worker = None
             self.org_thread = None
             self.org_worker = None
+            self.tags = None
+            self.tag_error = ""
+            self.pending_tag = None
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -283,12 +327,33 @@ def run_app() -> int:
             nav.addWidget(self.refresh_btn)
             nav.addWidget(self.folder_lbl, 1)
             left.addLayout(nav)
-            self.browser = QListWidget()
+            self.browser = TagBrowser()
+            self.browser.tag_dropped.connect(lambda tag, path: self.later(self.apply_tag, tag, path))
             left.addWidget(self.browser)
             hint = QLabel("Tick the box to select a file or folder. Click a folder's name to open it; "
                           "clicking a file's name also selects it.")
             hint.setWordWrap(True)
             left.addWidget(hint)
+            left.addWidget(QLabel("Name tags (this folder)"))
+            tag_row = QHBoxLayout()
+            self.tag_edit = QLineEdit()
+            self.tag_edit.setPlaceholderText("New tag, e.g. assignment")
+            self.tag_edit.setAccessibleName("New tag name")
+            self.tag_edit.returnPressed.connect(self.add_tag)
+            self.tag_add_btn = QPushButton("+")
+            self.tag_add_btn.setAccessibleName("Add tag")
+            self.tag_add_btn.clicked.connect(self.add_tag)
+            tag_row.addWidget(self.tag_edit, 1)
+            tag_row.addWidget(self.tag_add_btn)
+            left.addLayout(tag_row)
+            self.chip_box = QWidget()
+            self.chip_row = QHBoxLayout(self.chip_box)
+            self.chip_row.setContentsMargins(0, 0, 0, 0)
+            left.addWidget(self.chip_box)
+            self.tag_note = QLabel("")
+            self.tag_note.setWordWrap(True)
+            self.tag_note.setStyleSheet("color: #666666; font-size: 11px;")
+            left.addWidget(self.tag_note)
             body.addLayout(left, 3)
 
             right = QVBoxLayout()
@@ -419,6 +484,7 @@ def run_app() -> int:
             self.last_paths = []
             self.status.setText("")
             self.root_lbl.setText(f"Workshop: {state['root']}")
+            self.load_tags()
             self.refresh()
             self.stack.setCurrentIndex(1)
 
@@ -471,6 +537,7 @@ def run_app() -> int:
                 item.setSizeHint(row.sizeHint())
                 self.browser.addItem(item)
                 self.browser.setItemWidget(item, row)
+            self.render_tags()  # chips belong to the folder now shown
             self.refresh_selected()
 
         def refresh_selected(self):
@@ -530,8 +597,87 @@ def run_app() -> int:
             workshops.deselect(self.state, path)
             self.refresh()
 
+        # ---------- name tags: metadata in name_tags, the rename itself through the organizer ----------
+        def load_tags(self):
+            try:
+                self.tags, self.tag_error = name_tags.load(), ""
+            except name_tags.TagError as e:
+                self.tags, self.tag_error = None, e.message
+
+        def render_tags(self):
+            while self.chip_row.count():
+                w = self.chip_row.takeAt(0).widget()
+                if w:
+                    w.deleteLater()
+            if self.tags is None:
+                for w in (self.tag_edit, self.tag_add_btn):
+                    w.setEnabled(False)
+                self.tag_note.setText(self.tag_error)
+                return
+            current = name_tags.chips(self.tags, self.state["current"])
+            for tag in current:
+                self.chip_row.addWidget(TagChip(tag))
+                rm = QPushButton("x")
+                rm.setFixedWidth(22)
+                rm.setAccessibleName(f"Remove tag {tag}")
+                rm.setToolTip(f"Remove the {tag} tag (its numbering is remembered)")
+                rm.clicked.connect(lambda _=False, t=tag: self.later(self.remove_tag, t))
+                self.chip_row.addWidget(rm)
+            self.chip_row.addStretch(1)
+            full = len(current) >= name_tags.MAX_CHIPS
+            self.tag_edit.setEnabled(not full)
+            self.tag_add_btn.setEnabled(not full)
+            self.tag_note.setText(f"{name_tags.MAX_CHIPS} tags is the limit for a folder; remove one to add another."
+                                  if full else "Drag a tag onto a file to rename it tag_1, tag_2, ... (extension kept).")
+
+        def add_tag(self):
+            if self.tags is None:
+                return
+            try:
+                name = name_tags.add_chip(self.tags, self.state["current"], self.tag_edit.text())
+                self.tag_edit.clear()
+                self.status.setText(f"Tag '{name}' saved for this folder.")
+            except name_tags.TagError as e:
+                self.status.setText(f"Tag not added: {e.message}")
+            self.render_tags()
+
+        def remove_tag(self, tag):
+            try:
+                name_tags.remove_chip(self.tags, self.state["current"], tag)
+                self.status.setText(f"Tag '{tag}' removed; recreating it continues its numbering.")
+            except name_tags.TagError as e:
+                self.status.setText(e.message)
+            self.render_tags()
+
+        def apply_tag(self, tag, path):
+            """A chip dropped on a browser row: reserve tag_N, then plan and run one rename."""
+            if self.tags is None or self.thread is not None or self.org_thread is not None:
+                return
+            if not path or Path(path).is_dir():
+                self.status.setText("Drop a tag on a file; nothing was renamed.")
+                return
+            folder = self.state["current"]
+            try:
+                res = name_tags.reserve(self.tags, folder, tag, path)
+            except name_tags.TagError as e:
+                self.status.setText(f"Name tag: {e.message}")
+                return
+            request = organizing.capture_request(self.state, "rename", {"new_name": res["new_name"]}, sources=[path])
+            try:
+                plan = organizing.plan_action(request)
+            except organizing.OrganizeError as e:
+                try:
+                    name_tags.finish(self.tags, folder, res, succeeded=False)
+                except name_tags.TagError:
+                    pass
+                self.status.setText(f"Name tag: {e.message}")
+                return
+            self.pending_tag = (folder, res)
+            self.run_plan(plan)
+
         def refresh_clicked(self):
             gone = workshops.prune(self.state)
+            self.load_tags()
             self.refresh()
             if gone:
                 self.status.setText("Refresh removed from the selection (no longer on disk): " + ", ".join(
@@ -575,7 +721,11 @@ def run_app() -> int:
                                         QMessageBox.Ok | QMessageBox.Cancel) != QMessageBox.Ok:
                     self.status.setText("Cancelled. Nothing was changed.")
                     return
-            self.status.setText(f"{ACTION_VERB[action]}: working on {len(lines)} item(s)...")
+            self.run_plan(plan)
+
+        def run_plan(self, plan):
+            """Execute a validated plan off the UI thread (organizer buttons and name-tag renames)."""
+            self.status.setText(f"{ACTION_VERB[plan['action']]}: working on {len(plan['items'])} item(s)...")
             self.org_thread = QThread()
             self.org_worker = OrganizeWorker(plan)
             self.org_worker.moveToThread(self.org_thread)
@@ -589,12 +739,22 @@ def run_app() -> int:
             self.org_thread.wait()
             self.org_thread = None
             workshops.reconcile(self.state, result["outcomes"])
+            tag_note = ""
+            if self.tags is not None:  # tag metadata follows confirmed outcomes only
+                try:
+                    if self.pending_tag:
+                        folder, res = self.pending_tag
+                        name_tags.finish(self.tags, folder, res, succeeded=result["status"] == "ok")
+                    name_tags.save_reconciled(self.tags, result["outcomes"])
+                except name_tags.TagError as e:
+                    tag_note = "\n" + e.message
+            self.pending_tag = None
             try:
                 organizing.clipboard_after(result)
             except Exception:
                 pass  # clipboard trouble must not hide the file report
             self.refresh()
-            self.status.setText(describe_outcomes(result))
+            self.status.setText(describe_outcomes(result) + tag_note)
 
         # ---------- generation ----------
         def generate(self):

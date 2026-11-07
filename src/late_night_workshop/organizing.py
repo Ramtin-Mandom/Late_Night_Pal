@@ -35,7 +35,7 @@ from pathlib import Path
 
 from . import AppError, super_wrap, tasks, workshops
 
-ACTIONS = ("delete", "rip", "wrap", "copy", "paste", "super_wrap")
+ACTIONS = ("delete", "rip", "wrap", "copy", "paste", "super_wrap", "rename")  # rename: name-tag drop
 STATUSES = ("completed", "failed", "unattempted")
 CHANGES = ("moved", "copied", "deleted", "copied_source_kept")
 
@@ -48,13 +48,14 @@ class OrganizeError(AppError):
         self.paths = [str(p) for p in paths]
 
 
-def capture_request(state: dict, action: str, parameters: dict | None = None) -> dict:
-    """Snapshot root, current folder and selection at click time (mirrors ui.build_request)."""
+def capture_request(state: dict, action: str, parameters: dict | None = None, sources=None) -> dict:
+    """Snapshot root, current folder and selection at click time (mirrors ui.build_request).
+    sources overrides the selection for actions aimed at one entry (a name-tag drop)."""
     return {
         "action": action,
         "workshop_root": str(state["root"]),
         "destination": str(state["current"]),
-        "sources": [str(p) for p in workshops.selected_sorted(state)],
+        "sources": [str(p) for p in (workshops.selected_sorted(state) if sources is None else sources)],
         "parameters": dict(parameters or {}),
     }
 
@@ -362,7 +363,23 @@ def _plan_cut_retry(root: Path, dest: Path, bid: str, record: dict) -> dict:
     return _plan("paste", root, dest, items, batch_id=bid, skipped=skipped)
 
 
-_PLANNERS = {"wrap": _plan_wrap, "super_wrap": _plan_super_wrap, "rip": _plan_rip, "delete": _plan_delete,
+def _plan_rename(root: Path, request: dict) -> dict:
+    """One ordinary file in the current folder -> new_name beside it; never overwrites (case-insensitive)."""
+    dest = preflight_destination(root, request["destination"])
+    sources = preflight_sources(root, request["sources"])
+    if len(sources) != 1 or sources[0].is_dir():
+        raise OrganizeError("not_a_file", "Name tags rename one file at a time.", sources)
+    src = sources[0]
+    if os.path.normcase(src.parent) != os.path.normcase(dest):
+        raise OrganizeError("other_folder", "Tags rename files in the folder they belong to.", [src])
+    name = check_folder_name(request["parameters"].get("new_name"))
+    target = dest / name
+    if os.path.lexists(target) or any(c.name.lower() == name.lower() for c in dest.iterdir()):
+        raise OrganizeError("destination_exists", f"'{name}' already exists in {dest.name}; nothing was renamed.", [target])
+    return _plan("rename", root, dest, [_item(src, target, "move")])
+
+
+_PLANNERS = {"wrap": _plan_wrap, "rename": _plan_rename, "super_wrap": _plan_super_wrap, "rip": _plan_rip, "delete": _plan_delete,
              "copy": _plan_copy, "paste": _plan_paste}
 
 

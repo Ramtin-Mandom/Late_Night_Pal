@@ -31,6 +31,10 @@ Each button snapshots root, current folder and selection at the click (`organizi
 
 6. Select `Cal_1_assignment_1.pdf`, `Cal_1_Note_1.pdf`, `Cal_1_assignment_2.pdf` (and optionally `Cal_2_assignment_1.pdf` or a folder), open the destination folder, **Super Wrap**, name `Calculus`. The confirmation lists every source → destination. The result is `Calculus/Cal_1/assignment/1.pdf` and `2.pdf`, `Calculus/Cal_1/Note_1.pdf`, and singletons and folders directly in `Calculus` with their names unchanged. A name clash anywhere in the new tree, or a name Windows forbids, refuses the whole run before anything moves.
 
+## Name tags (P2-M5)
+
+Below the browser, type `assignment` and press **+**: a chip appears for the **current folder** only (at most six; duplicates in any case and invalid names are refused). Drag the chip onto a file in the browser: the file becomes `assignment_1.pdf` (extension kept), the next drop `assignment_2…`, in drop order. The chip stays. Dropping on a folder or empty space renames nothing and uses no number; a failed rename gives its number back. Numbers already used by a file called `assignment_N` (any extension) are skipped, and nothing is overwritten. Removing a chip and adding it again continues the numbering. Tags and counters persist across restarts, follow folders moved by Wrap, Super Wrap, Rip or a cut Paste (including tagged folders inside them), and are cleared for folders Delete really removed. A recreated empty folder starts at 1.
+
 ## 3. Choose a task and parameters
 
 - **Output type → Single file**: Task is Checklist, Notes, **Summary** (default), Answer key, One-page cheat sheet or Sample questions, plus **Language style** (Technical / **Standard** / Simple).
