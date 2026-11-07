@@ -154,6 +154,41 @@ def prune(state: dict) -> list[Path]:
     return gone
 
 
+def _under(path: Path, top: Path) -> bool:
+    p, t = os.path.normcase(str(path)), os.path.normcase(str(top))
+    return p == t or p.startswith(t.rstrip("\\/") + os.sep)
+
+
+def remap_paths(paths, outcomes) -> list[Path]:
+    """Apply only completed changes: moved entries (and anything inside them) get their new path,
+    deleted entries (and anything inside them) are dropped, everything else is kept as is."""
+    out = []
+    for p in map(Path, paths):
+        for o in outcomes:
+            if o["status"] != "completed":
+                continue
+            src = Path(o["source"])
+            if o["change"] == "moved" and _under(p, src):
+                p = Path(o["destination"]) / Path(os.path.relpath(p, src)) if p != src else Path(o["destination"])
+            elif o["change"] == "deleted" and _under(p, src):
+                p = None
+                break
+        if p is not None:
+            out.append(Path(os.path.normpath(p)))
+    return out
+
+
+def reconcile(state: dict, outcomes) -> None:
+    """After an organizer run: remap completed moves, drop completed deletions, keep failed,
+    unattempted and copied_source_kept entries (their sources still exist). The current folder
+    follows a move, or falls back to its nearest surviving folder."""
+    state["selected"] = set(remap_paths(state["selected"], outcomes))
+    current = (remap_paths([state["current"]], outcomes) or [state["current"]])[0]
+    while current != state["root"] and not current.is_dir():
+        current = current.parent
+    state["current"] = current
+
+
 def selected_sorted(state: dict) -> list[Path]:
     """Selected paths in stable workshop-relative order."""
     return sorted(state["selected"], key=lambda p: relative(state, p).lower())

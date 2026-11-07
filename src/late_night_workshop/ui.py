@@ -7,14 +7,15 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 import threading
 from pathlib import Path
 
-from . import generation, inputs, tasks, workshops
+from . import generation, inputs, organizing, tasks, workshops
 
 SELECTED_BG = "#2563eb"  # blue highlight for selected entries
 SELECTED_FG = "#ffffff"
 ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("copy", "Copy"), ("paste", "Paste"),
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
-ORGANIZE_PENDING = "Not available yet: organizer actions arrive in P2-M3."
+SUPER_WRAP_PENDING = "Super Wrap arrives in P2-M4."
+ACTION_VERB = {"wrap": "Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -83,6 +84,35 @@ def make_me_status(state: dict) -> dict:
     return {"ok": True, "blockers": {}, "message": ""}
 
 
+def describe_outcomes(result: dict) -> str:
+    """Organizer status text naming every path; never generation's 'nothing was saved' wording."""
+    plan_root = result.get("root", "")
+    lab = lambda p: organizing.label(plan_root, p) if p else ""
+    verb = ACTION_VERB.get(result["action"], result["action"])
+    out = result["outcomes"]
+    done = [o for o in out if o["status"] == "completed"]
+    if result.get("error"):
+        return f"{verb} stopped before changing anything: {result['error']['message']}"
+    head = (f"{verb} finished: {len(done)} item(s) done." if result["status"] == "ok" else
+            f"{verb} stopped: {len(done)} done, {sum(o['status'] == 'failed' for o in out)} failed, "
+            f"{sum(o['status'] == 'unattempted' for o in out)} not attempted.")
+    lines = [head]
+    if result.get("skipped"):
+        lines.append(f"Already moved earlier (skipped): {len(result['skipped'])}.")
+    for o in out:
+        where = f"{lab(o['source'])} -> {lab(o['destination'])}" if o["destination"] else lab(o["source"])
+        if o["status"] == "completed":
+            lines.append(f"done ({o['change']}): {where}")
+        elif o["status"] == "failed":
+            lines.append(f"FAILED: {where}: {o['error']['message']}")
+        else:
+            lines.append(f"not attempted: {lab(o['source'])} (unchanged)")
+    if result["status"] != "ok":
+        lines.append("Completed items stay where they are now; failed and unattempted items were left in place."
+                     + (" Paste the same cut again to retry the rest." if result.get("batch_id") else ""))
+    return "\n".join(lines)
+
+
 def run_app() -> int:
     from PySide6.QtCore import QObject, Qt, QThread, QTimer, QUrl, Signal
     from PySide6.QtGui import QBrush, QColor, QDesktopServices
@@ -119,6 +149,22 @@ def run_app() -> int:
                 result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
             self.finished.emit(result)
 
+    class OrganizeWorker(QObject):
+        finished = Signal(dict)
+
+        def __init__(self, plan):
+            super().__init__()
+            self.plan = plan
+
+        def run(self):
+            try:
+                result = organizing.execute_plan(self.plan)
+            except Exception as e:  # last-resort guard: report, never hang
+                result = {"action": self.plan["action"], "status": "failed", "outcomes": [], "created": [],
+                          "removed": [], "error": {"message": f"Unexpected error ({type(e).__name__}: {e})."}}
+            result["root"] = self.plan["root"]
+            self.finished.emit(result)
+
     class Window(QMainWindow):
         def __init__(self):
             super().__init__()
@@ -126,6 +172,8 @@ def run_app() -> int:
             self.state = None
             self.thread = None
             self.worker = None
+            self.org_thread = None
+            self.org_worker = None
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -265,15 +313,16 @@ def run_app() -> int:
             grid = QHBoxLayout()
             for action, label in ORGANIZE_ACTIONS:
                 b = QPushButton(label)
-                b.setEnabled(False)
-                b.setToolTip(ORGANIZE_PENDING)
+                if action == "super_wrap":
+                    b.setEnabled(False)
+                    b.setToolTip(SUPER_WRAP_PENDING)
+                b.clicked.connect(lambda _=False, a=action: self.organize(a))
                 self.action_btns[action] = b
                 grid.addWidget(b)
             org.addLayout(grid)
             rip_help = QLabel(f"Rip: {RIP_HELP}")
             rip_help.setWordWrap(True)
             org.addWidget(rip_help)
-            org.addWidget(QLabel(ORGANIZE_PENDING))
             org.addStretch(1)
             make_page = QWidget()
             right_outer, right = right, QVBoxLayout(make_page)
@@ -459,7 +508,10 @@ def run_app() -> int:
             self.selected_lbl.setText(f"Selected Inputs ({len(selected)}: {files} file{'s' * (files != 1)}, "
                                       f"{folders} folder{'s' * (folders != 1)})")
             self.eligibility_lbl.setText(status["message"] if status["blockers"] else "")
-            self.generate_btn.setEnabled(status["ok"] and self.thread is None)
+            busy = self.thread is not None or self.org_thread is not None
+            self.generate_btn.setEnabled(status["ok"] and not busy)
+            for action, b in self.action_btns.items():
+                b.setEnabled(action != "super_wrap" and not busy)
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
 
@@ -491,9 +543,63 @@ def run_app() -> int:
             if self.state["current"] != self.state["root"]:
                 self.refresh(self.state["current"].parent)
 
+        # ---------- organizer: click -> capture -> plan -> (confirm) -> execute off-thread -> reconcile ----------
+        def organize(self, action):
+            if self.org_thread is not None or self.thread is not None:
+                return
+            request = organizing.capture_request(self.state, action)  # snapshot before any dialog
+            if action == "wrap":
+                name, ok = QInputDialog.getText(self, "Wrap", "New folder name (created in the current folder):")
+                request["parameters"]["folder_name"] = name if ok else None
+            elif action == "paste":
+                request["parameters"]["clipboard"] = organizing.clipboard_read()
+            try:
+                plan = organizing.plan_action(request)
+            except organizing.OrganizeError as e:
+                paths = "\n".join(organizing.label(request["workshop_root"], p) for p in e.paths)
+                self.status.setText(f"{ACTION_VERB.get(action, action)}: {e.message}" + (f"\n{paths}" if paths else ""))
+                return
+            if action == "copy":
+                organizing.clipboard_put([i["source"] for i in plan["items"]])
+                self.status.setText(f"Copied {len(plan['items'])} item(s) to the clipboard. "
+                                    "Paste here or in File Explorer; nothing was copied yet.")
+                return
+            lines = organizing.preview(plan)
+            if action == "delete" or plan.get("batch_id"):
+                title = "Delete" if action == "delete" else "Move (cut) into this folder"
+                text = (f"Send {len(lines)} item(s) to the Recycle Bin?" if action == "delete"
+                        else f"Move {len(lines)} item(s) here? Their originals will be removed.")
+                if plan.get("skipped"):
+                    text += f" ({len(plan['skipped'])} already moved earlier will be skipped.)"
+                shown = "\n".join(lines[:15]) + (f"\n... and {len(lines) - 15} more" if len(lines) > 15 else "")
+                if QMessageBox.question(self, title, f"{text}\n\n{shown}",
+                                        QMessageBox.Ok | QMessageBox.Cancel) != QMessageBox.Ok:
+                    self.status.setText("Cancelled. Nothing was changed.")
+                    return
+            self.status.setText(f"{ACTION_VERB[action]}: working on {len(lines)} item(s)...")
+            self.org_thread = QThread()
+            self.org_worker = OrganizeWorker(plan)
+            self.org_worker.moveToThread(self.org_thread)
+            self.org_thread.started.connect(self.org_worker.run)
+            self.org_worker.finished.connect(self.organize_finished)
+            self.refresh_selected()  # disables actions and Generate while paths are in use
+            self.org_thread.start()
+
+        def organize_finished(self, result):
+            self.org_thread.quit()
+            self.org_thread.wait()
+            self.org_thread = None
+            workshops.reconcile(self.state, result["outcomes"])
+            try:
+                organizing.clipboard_after(result)
+            except Exception:
+                pass  # clipboard trouble must not hide the file report
+            self.refresh()
+            self.status.setText(describe_outcomes(result))
+
         # ---------- generation ----------
         def generate(self):
-            if self.thread is not None or not make_me_status(self.state)["ok"]:
+            if self.thread is not None or self.org_thread is not None or not make_me_status(self.state)["ok"]:
                 return  # duplicate click while running, or the selection has entries Make me can't use
             request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
                                     self.efficient_box.isChecked())

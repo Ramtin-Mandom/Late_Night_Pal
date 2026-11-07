@@ -19,7 +19,17 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 
 **Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
 
-**Refresh** (beside Up) rescans the folder and drops selected entries that no longer exist, naming them in the status. Ordinary redraws never drop selections. **Organize** shows the six actions disabled until P2-M3; they will snapshot root, current folder and selection at click with `organizing.capture_request()`, as Generate does with `build_request()`.
+**Refresh** (beside Up) rescans the folder and drops selected entries that no longer exist, naming them in the status. Ordinary redraws never drop selections. ## Organize (P2-M3; use a disposable workshop)
+
+Each button snapshots root, current folder and selection at the click (`organizing.capture_request()`, like Generate's `build_request()`), validates the whole plan, then runs it off the UI thread. The status lists every item as done, FAILED (with the reason) or not attempted; nothing is overwritten.
+
+1. Select `Lectures/a.pdf` and `Labs/b.pdf`, open `Coursework`, **Wrap**, name `Batch` → `Coursework/Batch/a.pdf` and `b.pdf`; the selection follows them.
+2. Select `Batch`, **Rip** ("Move each selected folder's contents up one level.") → `Coursework/a.pdf`, `Coursework/b.pdf`, and `Batch` is removed. It does not restore `Lectures`/`Labs`. Rip is refused, with the clashing names, if a child would collide with an existing entry.
+3. Select `a.pdf`, **Copy** (file references only; also pasteable in File Explorer), then **Paste** in the same folder → `a (2).pdf`. Pasting a folder into itself or below itself is refused.
+4. Select `a (2).pdf`, **Delete**, confirm → it goes to the Recycle Bin. If the drive has no Recycle Bin, nothing is deleted.
+5. Cut files in File Explorer, then **Paste** here and confirm. If an item fails, the status shows which moved, which failed and which were not attempted; the rest stay where they were. Paste the same cut again to finish: moved items are skipped. Network (UNC) sources are refused for cut; copy them instead.
+
+Super Wrap is disabled until P2-M4.
 
 ## 3. Choose a task and parameters
 
