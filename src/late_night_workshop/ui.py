@@ -5,9 +5,10 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 """
 
 import threading
+import time
 from pathlib import Path
 
-from . import generation, inputs, name_tags, organizing, tasks, workshops
+from . import downloads, generation, inputs, name_tags, organizing, resource_path, tasks, workshops
 
 SELECTED_BG = "#2563eb"  # blue highlight for selected entries
 SELECTED_FG = "#ffffff"
@@ -15,6 +16,13 @@ ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("co
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
 TAG_MIME = "application/x-late-night-pal-tag"
+BIN_ICON = "assets/recent-downloads-bin.svg"
+
+
+def describe_download(record: dict) -> str:
+    """Tray row: filename, where it was saved, and Chrome's completion time (local clock)."""
+    p = Path(record["path"])
+    return f"{p.name}   ·   {p.parent}   ·   {time.strftime('%H:%M', time.localtime(record['downloaded_at']))}"
 ACTION_VERB = {"rename": "Name tag", "wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
@@ -115,7 +123,7 @@ def describe_outcomes(result: dict) -> str:
 
 def run_app() -> int:
     from PySide6.QtCore import QMimeData, QObject, Qt, QThread, QTimer, QUrl, Signal
-    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag
+    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QIcon
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
                                    QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
@@ -147,6 +155,21 @@ def run_app() -> int:
                                              decide_inputs=self.decide)
             except Exception as e:  # last-resort guard so the UI never hangs in "running"
                 result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
+            self.finished.emit(result)
+
+    class CallWorker(QObject):
+        """Runs one read-only call off the UI thread (Chrome download discovery)."""
+        finished = Signal(object)
+
+        def __init__(self, fn):
+            super().__init__()
+            self.fn = fn
+
+        def run(self):
+            try:
+                result = self.fn()
+            except Exception as e:  # the provider never raises; this only keeps the UI alive
+                result = {"records": [], "errors": [f"Unexpected error ({type(e).__name__})."]}
             self.finished.emit(result)
 
     class OrganizeWorker(QObject):
@@ -217,6 +240,9 @@ def run_app() -> int:
             self.tags = None
             self.tag_error = ""
             self.pending_tag = None
+            self.bin_thread = None
+            self.bin_worker = None
+            self.bin_records = []
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -334,6 +360,35 @@ def run_app() -> int:
                           "clicking a file's name also selects it.")
             hint.setWordWrap(True)
             left.addWidget(hint)
+            self.bin_btn = QPushButton("Recent downloads")
+            self.bin_btn.setIcon(QIcon(str(resource_path(BIN_ICON))))
+            self.bin_btn.setAccessibleName("Recent downloads bin")
+            self.bin_btn.setToolTip("Files Chrome finished downloading in the last hour. Opening this never "
+                                    "changes or deletes them.")
+            self.bin_btn.clicked.connect(self.toggle_bin)
+            left.addWidget(self.bin_btn)
+            self.bin_panel = QWidget()
+            bin_lay = QVBoxLayout(self.bin_panel)
+            bin_lay.setContentsMargins(0, 0, 0, 0)
+            self.bin_note = QLabel("")
+            self.bin_note.setWordWrap(True)
+            bin_lay.addWidget(self.bin_note)
+            self.bin_list = QListWidget()
+            self.bin_list.setAccessibleName("Recent downloads; tick the ones to copy")
+            self.bin_list.setMaximumHeight(140)
+            self.bin_list.itemChanged.connect(lambda *_: self.update_bin_buttons())
+            bin_lay.addWidget(self.bin_list)
+            bin_row = QHBoxLayout()
+            self.bin_copy_btn = QPushButton("Copy to current folder")
+            self.bin_copy_btn.setToolTip("Copies the ticked files here with Paste's naming rules; the originals stay.")
+            self.bin_copy_btn.clicked.connect(self.copy_downloads)
+            bin_close = QPushButton("Close")
+            bin_close.clicked.connect(self.toggle_bin)
+            bin_row.addWidget(self.bin_copy_btn)
+            bin_row.addWidget(bin_close)
+            bin_lay.addLayout(bin_row)
+            self.bin_panel.setVisible(False)
+            left.addWidget(self.bin_panel)
             left.addWidget(QLabel("Name tags (this folder)"))
             tag_row = QHBoxLayout()
             self.tag_edit = QLineEdit()
@@ -486,6 +541,7 @@ def run_app() -> int:
             self.root_lbl.setText(f"Workshop: {state['root']}")
             self.load_tags()
             self.refresh()
+            self.reload_bin()  # startup reconciliation; the tray itself stays closed
             self.stack.setCurrentIndex(1)
 
         def mode_changed(self, index):
@@ -577,6 +633,7 @@ def run_app() -> int:
             self.generate_btn.setEnabled(status["ok"] and not busy)
             for action, b in self.action_btns.items():
                 b.setEnabled(not busy)
+            self.update_bin_buttons()
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
 
@@ -675,8 +732,82 @@ def run_app() -> int:
             self.pending_tag = (folder, res)
             self.run_plan(plan)
 
+        # ---------- recent downloads bin: discovery in downloads, import through the paste-copy planner ----------
+        def toggle_bin(self):
+            opening = not self.bin_panel.isVisible()
+            self.bin_panel.setVisible(opening)
+            if opening:
+                self.reload_bin()
+
+        def reload_bin(self):
+            """On demand only (startup, opening, Refresh, after an import); no timer."""
+            if self.bin_thread is not None:
+                return
+            self.bin_note.setText("Checking Chrome downloads...")
+            self.bin_thread = QThread()
+            self.bin_worker = CallWorker(downloads.recent_downloads)
+            self.bin_worker.moveToThread(self.bin_thread)
+            self.bin_thread.started.connect(self.bin_worker.run)
+            self.bin_worker.finished.connect(self.bin_loaded)
+            self.bin_thread.start()
+
+        def bin_loaded(self, result):
+            self.bin_thread.quit()
+            self.bin_thread.wait()
+            self.bin_thread = None
+            ticked = {self.bin_list.item(i).data(PATH_ROLE) for i in range(self.bin_list.count())
+                      if self.bin_list.item(i).checkState() == Qt.Checked}
+            self.bin_records = result["records"]
+            self.bin_list.blockSignals(True)
+            self.bin_list.clear()
+            for r in self.bin_records:
+                item = QListWidgetItem(describe_download(r))
+                item.setData(PATH_ROLE, r["path"])
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked if r["path"] in ticked else Qt.Unchecked)
+                item.setToolTip(f"{r['path']}\nCompleted {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(r['downloaded_at']))}"
+                                f" ({r['timestamp_source']})")
+                self.bin_list.addItem(item)
+            self.bin_list.blockSignals(False)
+            n = len(self.bin_records)
+            self.bin_btn.setText(f"Recent downloads ({n})" if n else "Recent downloads")
+            note = (f"{n} file(s) Chrome finished downloading in the last hour." if n else
+                    "No completed Chrome downloads from the last hour.")
+            self.bin_note.setText("\n".join([note] + result.get("errors", [])))
+            self.update_bin_buttons()
+
+        def ticked_downloads(self) -> list[str]:
+            return [self.bin_list.item(i).data(PATH_ROLE) for i in range(self.bin_list.count())
+                    if self.bin_list.item(i).checkState() == Qt.Checked]
+
+        def update_bin_buttons(self):
+            busy = self.thread is not None or self.org_thread is not None
+            self.bin_copy_btn.setEnabled(bool(self.ticked_downloads()) and not busy)
+
+        def copy_downloads(self):
+            """Ticked tray entries -> the existing paste-copy plan for the folder open right now."""
+            paths = self.ticked_downloads()
+            if not paths or self.thread is not None or self.org_thread is not None:
+                return
+            request = organizing.capture_request(self.state, "paste", {"clipboard": {"paths": paths, "effect": "copy"}})
+            try:
+                plan = organizing.plan_action(request)
+            except organizing.OrganizeError as e:
+                self.status.setText(f"Copy to current folder: {e.message}\n" +
+                                    "\n".join(organizing.label(request["workshop_root"], p) for p in e.paths))
+                self.reload_bin()
+                return
+            shown = "\n".join(organizing.preview(plan)[:15])
+            if QMessageBox.question(self, "Copy to current folder",
+                                    f"Copy {len(plan['items'])} download(s) here? The originals stay where they are."
+                                    f"\n\n{shown}", QMessageBox.Ok | QMessageBox.Cancel) != QMessageBox.Ok:
+                self.status.setText("Cancelled. Nothing was copied.")
+                return
+            self.run_plan(plan)
+
         def refresh_clicked(self):
             gone = workshops.prune(self.state)
+            self.reload_bin()
             self.load_tags()
             self.refresh()
             if gone:
@@ -749,6 +880,8 @@ def run_app() -> int:
                 except name_tags.TagError as e:
                     tag_note = "\n" + e.message
             self.pending_tag = None
+            if result["action"] == "paste":
+                self.reload_bin()  # import reconciliation: drop expired or missing entries
             try:
                 organizing.clipboard_after(result)
             except Exception:
