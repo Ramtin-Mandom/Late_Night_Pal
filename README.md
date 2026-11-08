@@ -49,7 +49,7 @@ Demo flow:
 2. Double-click a folder to open it (a single click selects it), and use **Up** to go back. Click a PDF, PPTX, DOCX, TXT or MD file to select it: it turns blue and appears under **Selected Inputs** with its workshop-relative path. Click it again to deselect. The selection stays as you move between folders. Ctrl+click toggles a row without opening it, and Shift+click adds a range.
    To organize by hand, drag files or folders onto a folder row, onto **Up**, or onto the "Drop here…" box to **move** them (dragging a selected row moves the whole selection), and drag rows from **Recent downloads** onto a folder to **copy** them in. Names that are taken get ` (2)`; nothing is overwritten, and the status line says what happened ("Moved 3 files to Lectures.").
 3. Go to the folder where the result should go. Optionally tick **Efficient**. Choose an **Output type** and **Task**, then set the Language style (Single file) or Days and an optional Folder name (Study plan). Changing tasks keeps your selection.
-4. Click **Generate**. All selected files go to Gemini in one request, and the outputs from the table above are saved in the current folder. The first PDF opens automatically, and **Open document** / **Open output folder** reopen it.
+4. Click **Generate**. All selected files go to Gemini in one request, and the outputs from the table above are saved in the current folder without opening them. Use **Open document** / **Open output folder** when you want to view the results.
 
 If something fails, the status line says which stage failed, what to do next, and that nothing was saved. Your selection and settings stay, so you can just click **Generate** again. LaTeX logs for compile failures are saved in `%LOCALAPPDATA%\late_night_workshop\logs\`.
 
@@ -112,6 +112,6 @@ The demo workshop is `Demo\Biology Demo Workshop\` in the ZIP, or `demo\Biology 
 3. Choose **Output type: Study plan**, **Task: Make daily study plan**, **Days: 2**, leave **Folder name** empty, and tick **Efficient**. Click **Generate**.
 4. A dialog says `Labs/osmosis-lab-scan.pdf (page 1) has little or no extractable text…`. Click **Process original**.
 5. While Gemini works (about 2 minutes in the rehearsal; earlier runs took up to 7), open the labelled example `Example output\M6 Daily Study Plan (pre-fix)\Day 01\notes.pdf`. It was built from the scan and states the 0.8 M → −14% result, and its subtitle reads `From Labs/osmosis-lab-scan.pdf`. It is the M6 rehearsal output from **before the answer-label fix**, so its *Answers* sections lack `Q1`/`Q2` labels; fresh runs label them.
-6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, `Day 01\notes.pdf` opens automatically. Use **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`.
+6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, the PDFs stay in that folder without opening. Use **Open document** to view the first PDF or **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`.
 
 **Quick single-file demo** (verified from the packaged build): on a fresh copy, select only `Lectures\photosynthesis-lecture.pdf`, open `Revision`, choose **Single file → Summary**, then **Generate**. The result is `Revision\summary.pdf`.

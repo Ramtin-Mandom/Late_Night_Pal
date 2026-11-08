@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" fill="none" stroke-linecap="round" stroke-linejoin="round"><title>Folder with lecture sheets</title>
+<ellipse cx="122" cy="208" rx="85" ry="10" fill="#42638b" opacity=".16"/>
+<path d="M34 107V86a8 8 0 0 1 8-8h51l18 18h88a8 8 0 0 1 8 8v88H34Z" fill="#203b5d" stroke="#7598bc" stroke-width="4"/>
+<g transform="rotate(-13 88 112)"><rect x="54" y="44" width="72" height="110" rx="5" fill="#b9cde0" stroke="#789abb" stroke-width="3"/><path d="M68 66h42M68 80h34m-34 14h42" stroke="#6384a7" stroke-width="4"/></g>
+<g transform="rotate(10 153 109)"><rect x="119" y="53" width="70" height="108" rx="5" fill="#d0dfeb" stroke="#789abb" stroke-width="3"/><path d="M134 76h38m-38 14h30m-30 14h38" stroke="#6384a7" stroke-width="4"/></g>
+<path d="M25 120h71l15 15h103l-17 64H42Z" fill="#355c83" stroke="#8caccb" stroke-width="4"/>
+<path d="M99 160h45" stroke="#91b1cf" stroke-width="4"/>
+<path d="M205 53v14m-7-7h14" stroke="#dbac6a" stroke-width="3"/>
+</svg>

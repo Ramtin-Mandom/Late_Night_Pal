@@ -12,10 +12,10 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 
 ## 2. Select inputs across folders
 
-1. Double-click `[folder] Lectures` to open it (a single click selects the folder), then tick `topic.pdf` (or click its name) → `toggle_selection()`. The row turns blue and **Selected Inputs** shows `Lectures/topic.pdf` with a **Remove** button.
-2. **Up**, `[folder] Readings`, `topic.pdf` → Selected Inputs lists both relative paths.
+1. Double-click the folder-icon row `Lectures` to open it (a single click selects the folder), then tick `topic.pdf` (or click its name) → `toggle_selection()`. The row turns blue and **Selected Inputs** shows `Lectures/topic.pdf` with a **Remove** button.
+2. **Up**, the `Readings` folder, `topic.pdf` → Selected Inputs lists both relative paths.
 3. The selection survives navigation, mode and task changes. Ticking a folder's checkbox selects the folder without opening it. Any file type can be selected (types Make me can't use are greyed). **Remove** deselects an entry from any view, even one deleted on disk; it never deletes the file. **Ctrl+click** a row toggles it (a folder too, without opening it); **Shift+click** adds every row from the last clicked one to this one. A plain click never clears other selections.
-4. **Up**, `[folder] Revision`: this is the destination captured at Generate.
+4. **Up**, the `Revision` folder: this is the destination captured at Generate.
 
 **Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
 
@@ -69,7 +69,7 @@ A `Worker` runs `generation.generate(request)` on a `QThread`; Generate is disab
 7. **Renderer** `render_bundle()` → each body is wrapped in the Python preamble (allowlisted packages, title, subtitle, read guard) and compiled by lualatex in a restricted process in a temp folder (no key in its environment; on Windows a job object). Every document is compiled even if one fails.
    Daily PDFs' subtitles name that day's sources from the allocation (`Day 01 · From Lectures/topic.pdf · <date>`).
 8. **Publisher** `publish()` → builds `.lnp-staging-*` in `Revision/`, then renames it to `Daily Study Plan/` (or `Daily Study Plan (2)/` if that exists) with `Day 01/` and `Day 02/`. Observed: under 0.1 s.
-9. **Desktop UI** shows `Saved 6 PDFs in …\Daily Study Plan:` with the relative list and opens `Day 01/notes.pdf`. **Open output folder** opens `Daily Study Plan/`.
+9. **Desktop UI** shows `Saved 6 PDFs in …\Daily Study Plan:` with the relative list. PDFs stay in the output folder without opening. **Open document** opens the first PDF on request; **Open output folder** opens `Daily Study Plan/`.
 
 Other layouts:
 - **Make schedule** writes `Study Schedule/{schedule,file-guide,checklist}.pdf`. Validation requires a `Day N` heading for every day and a file guide that names every source. Observed: Gemini 290 s, render 7.9 s.

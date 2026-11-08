@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 400" fill="none" stroke-linecap="round" stroke-linejoin="round"><title>Moonlit study desk</title>
+<defs><radialGradient id="glow"><stop stop-color="#e9b86d" stop-opacity=".26"/><stop offset="1" stop-color="#e9b86d" stop-opacity="0"/></radialGradient><linearGradient id="night" x2="1" y2="1"><stop stop-color="#142c4b"/><stop offset="1" stop-color="#0b172b"/></linearGradient></defs>
+<rect width="600" height="400" rx="24" fill="url(#night)"/>
+<rect x="54" y="38" width="230" height="205" rx="15" fill="#112440" stroke="#345276" stroke-width="4"/>
+<path d="M169 40v200M56 146h226" stroke="#345276" stroke-width="4"/>
+<path d="M235 67a29 29 0 1 0 23 43 25 25 0 0 1-23-43Z" fill="#cadcf0"/>
+<g fill="#8eaccf"><circle cx="91" cy="84" r="2"/><circle cx="143" cy="117" r="2"/><circle cx="199" cy="64" r="2"/></g>
+<path d="m60 227 31-36 32 18 39-28 42 39 38-26 36 35v12H60Z" fill="#203c5d"/>
+<ellipse cx="449" cy="232" rx="148" ry="140" fill="url(#glow)"/>
+<path d="M45 291h510v20H45z" fill="#3a526d"/><path d="M61 311v59m478-59v59" stroke="#2c415d" stroke-width="12"/>
+<rect x="122" y="177" width="191" height="108" rx="9" fill="#1a2e49" stroke="#6c8eaf" stroke-width="4"/>
+<rect x="133" y="188" width="169" height="85" rx="3" fill="#294b6d"/>
+<path d="M154 211h58m-58 15h90m-90 15h71" stroke="#91b2d0" stroke-width="5"/>
+<path d="m110 285 13 9h190l13-9H110Z" fill="#8ba7c3"/>
+<path d="M303 280q35-15 67-4 30-13 64-5l17 30q-43-7-78 5-32-10-72-2Z" fill="#c1d2df" stroke="#7593ae" stroke-width="3"/>
+<path d="m370 276 3 30m-51-20 31-2m-31 8 32-2m35-5 29-3m-26 11 31-3" stroke="#7492aa" stroke-width="2.5"/>
+<path d="m405 297 31-25" stroke="#e8b369" stroke-width="5"/>
+<path d="M484 285h-49m25 0V175l-40-43" stroke="#7694ad" stroke-width="7"/>
+<path d="m405 120 39 19-14 30-61-30Z" fill="#d4a263" stroke="#e8b975" stroke-width="3"/>
+<path d="m374 142 54 27-45 102h-62Z" fill="#e9b86d" opacity=".07"/>
+<path d="M483 251h26v31h-26zM509 256h5a7 7 0 0 1 0 14h-5" fill="#3c6082" stroke="#83a0ba" stroke-width="3"/>
+</svg>

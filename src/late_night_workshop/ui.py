@@ -11,8 +11,10 @@ from pathlib import Path
 
 from . import downloads, generation, inputs, name_tags, organizing, resource_path, tasks, workshops
 
-SELECTED_BG = "#2563eb"  # blue highlight for selected entries
-SELECTED_FG = "#ffffff"
+from .theme import COLORS
+
+SELECTED_BG = COLORS["selected"]
+SELECTED_FG = COLORS["text"]
 ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("copy", "Copy"), ("paste", "Paste"),
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
@@ -153,12 +155,64 @@ def describe_drop(result: dict, effect: str) -> str:
 
 
 def run_app() -> int:
-    from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, Qt, QThread, QTimer, QUrl, Signal
+    from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QSize, Qt, QThread, QTimer, QUrl, Signal
     from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFontMetrics, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-                                   QInputDialog, QLabel, QLineEdit,
+                                   QGridLayout, QInputDialog, QLabel, QLineEdit, QProgressBar, QScrollArea, QSplitter, QSizePolicy,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
                                    QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
+
+    from .theme import apply_theme
+
+    def icon(name):
+        return QIcon(str(resource_path(f"assets/icons/ui/{name.replace('_', '-')}.svg")))
+
+    def decorate(button, name, primary=False):
+        button.setIcon(icon(name))
+        button.setIconSize(QSize(20, 20))
+        if primary:
+            button.setProperty("primary", True)
+        return button
+
+    def heading(text):
+        label = QLabel(text)
+        label.setProperty("role", "heading")
+        return label
+
+    class PathLabel(QLabel):
+        """Keep complete paths available without forcing the columns wider."""
+        def __init__(self, text=""):
+            super().__init__()
+            self.setTextFormat(Qt.PlainText)
+            self.full_text = ""
+            self.setMinimumWidth(0)
+            self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            self.setText(text)
+
+        def setText(self, text):
+            self.full_text = text
+            self.setToolTip(text)
+            self.setAccessibleName(text)
+            super().setText(self.fontMetrics().elidedText(text, Qt.ElideMiddle, max(40, self.width())))
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self.setText(self.full_text)
+
+    class StatusLabel(QLabel):
+        """Plain-text notices; existing setText callbacks stay intact."""
+        def setText(self, text):
+            super().setText(text)
+            self.setVisible(bool(text))
+            if hasattr(self, "progress"):
+                active = text.startswith(("Starting", "Preparing:", "Gemini:", "Checking:", "Rendering:", "Saving:"))
+                self.progress.setVisible(active)
+            if hasattr(self, "details"):
+                self.details.setVisible(bool(text))
+            tone = "error" if ("failed" in text.lower() or text.startswith("Error:")) else (
+                "success" if text.startswith(("Saved", "Moved", "Copied")) else "info")
+            self.setStyleSheet(f"background: {COLORS[tone + '_bg']}; color: {COLORS['text']}; "
+                              f"border: 1px solid {COLORS[tone]}; border-radius: 8px; padding: 12px;")
 
     PATH_ROLE = Qt.UserRole
 
@@ -219,7 +273,7 @@ def run_app() -> int:
             result["root"] = self.plan["root"]
             self.finished.emit(result)
 
-    HOT_STYLE = "background: #fde68a; color: #111111; border: 2px solid #d97706;"
+    HOT_STYLE = f"background: {COLORS['warning_bg']}; color: {COLORS['text']}; border: 2px solid {COLORS['amber']};"
 
     def drop_payload(md):
         """(effect, paths) for one of our file drags, else None."""
@@ -235,9 +289,9 @@ def run_app() -> int:
         text = ("-> " if effect == "move" else "+ ") + drag_label(effect, paths)
         fm = QFontMetrics(QApplication.font())
         pm = QPixmap(fm.horizontalAdvance(text) + 20, fm.height() + 12)
-        pm.fill(QColor("#2563eb" if effect == "move" else "#15803d"))
+        pm.fill(QColor(COLORS["primary"] if effect == "move" else COLORS["success_bg"]))
         painter = QPainter(pm)
-        painter.setPen(QColor("#ffffff"))
+        painter.setPen(QColor(COLORS["text"]))
         painter.drawText(pm.rect(), Qt.AlignCenter, text)
         painter.end()
         return pm
@@ -464,41 +518,77 @@ def run_app() -> int:
             self.stack.addWidget(self._start_page())
             self.stack.addWidget(self._workshop_page())
             self.setCentralWidget(self.stack)
-            self.resize(900, 600)
+            self.setMinimumSize(800, 560)
+            area = QApplication.primaryScreen().availableGeometry()
+            self.resize(min(1200, area.width()), min(780, area.height()))
             self.show_start()
 
         # ---------- start screen ----------
         def _start_page(self):
             page = QWidget()
-            lay = QVBoxLayout(page)
+            outer = QVBoxLayout(page)
+            outer.setContentsMargins(32, 24, 32, 24)
+            content = QWidget()
+            content.setMaximumWidth(1040)
+            lay = QVBoxLayout(content)
+            lay.setSpacing(24)
+            welcome = QHBoxLayout()
+            words = QVBoxLayout()
+            words.setSpacing(12)
+            words.addStretch()
             title = QLabel("Welcome to Late Night Pal")
-            title.setStyleSheet("font-size: 20px; font-weight: 600;")
-            lay.addWidget(title)
-            lay.addWidget(QLabel("Recent Workshops"))
-            self.recent_list = QListWidget()
-            self.recent_list.itemClicked.connect(self.open_recent)
-            lay.addWidget(self.recent_list)
+            title.setProperty("role", "title")
+            words.addWidget(title)
+            intro = QLabel("A calm workspace for your next study session.")
+            intro.setProperty("role", "support")
+            words.addWidget(intro)
             row = QHBoxLayout()
-            self.open_btn = QPushButton("Open Workshop")
+            self.open_btn = decorate(QPushButton("Open Workshop"), "folder", True)
             self.create_btn = QPushButton("Create Workshop")
             self.open_btn.clicked.connect(self.open_workshop_dialog)
             self.create_btn.clicked.connect(self.create_workshop_dialog)
             row.addWidget(self.open_btn)
             row.addWidget(self.create_btn)
-            lay.addLayout(row)
+            row.addStretch()
+            words.addLayout(row)
+            words.addStretch()
+            welcome.addLayout(words, 1)
+            self.welcome_art = QLabel()
+            self.welcome_art.setPixmap(QIcon(str(resource_path("assets/icons/illustrations/welcome-desk.svg"))).pixmap(300, 200))
+            self.welcome_art.setFixedSize(300, 200)
+            welcome.addWidget(self.welcome_art)
+            lay.addLayout(welcome)
+            lay.addWidget(heading("Recent Workshops"))
+            self.recent_list = QListWidget()
+            self.recent_list.itemClicked.connect(self.open_recent)
+            lay.addWidget(self.recent_list, 1)
+            outer.addWidget(content, 1)
+            outer.setAlignment(content, Qt.AlignHCenter)
+            content.setMinimumWidth(700)
             return page
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            if hasattr(self, "welcome_art"):
+                self.welcome_art.setVisible(self.width() >= 1040)
 
         def show_start(self):
             self.recent_list.clear()
             recents = workshops.load_recents()
             for r in recents:
-                item = QListWidgetItem(r["path"] if r["exists"] else f"{r['path']}  (missing)")
+                path = Path(r["path"])
+                item = QListWidgetItem(icon("folder" if r["exists"] else "warning"),
+                                       f"{path.name}  {'— Folder unavailable' if not r['exists'] else ''}\n{path.parent}")
+                item.setSizeHint(QSize(0, 64))
+                item.setToolTip(str(path))
                 item.setData(PATH_ROLE, r["path"])
                 if not r["exists"]:
-                    item.setForeground(QBrush(QColor("#888888")))
+                    item.setForeground(QBrush(QColor(COLORS["muted"])))
                 self.recent_list.addItem(item)
             if not recents:
-                self.recent_list.addItem(QListWidgetItem("No recent workshops yet."))
+                item = QListWidgetItem("Open a folder to start a workshop.")
+                item.setFlags(Qt.NoItemFlags)
+                self.recent_list.addItem(item)
             self.stack.setCurrentIndex(0)
 
         def ask_folder(self, caption):
@@ -547,16 +637,25 @@ def run_app() -> int:
         def _workshop_page(self):
             page = QWidget()
             lay = QVBoxLayout(page)
+            lay.setContentsMargins(24, 16, 24, 24)
+            lay.setSpacing(16)
             top = QHBoxLayout()
-            self.back_btn = QPushButton("< Workshops")
+            top.setSpacing(16)
+            self.back_btn = QPushButton("‹ Workshops")
             self.back_btn.clicked.connect(self.show_start)
-            self.root_lbl = QLabel()
+            self.root_lbl = PathLabel()
+            self.root_lbl.setProperty("role", "heading")
             top.addWidget(self.back_btn)
             top.addWidget(self.root_lbl, 1)
             lay.addLayout(top)
 
-            body = QHBoxLayout()
-            left = QVBoxLayout()
+            body = QSplitter(Qt.Horizontal)
+            body.setHandleWidth(8)
+            left_panel = QWidget()
+            left_panel.setMinimumWidth(320)
+            left = QVBoxLayout(left_panel)
+            left.setContentsMargins(0, 0, 8, 0)
+            left.setSpacing(12)
             nav = QHBoxLayout()
             self.up_btn = DropButton("Up")
             self.up_btn.setToolTip("Open the parent folder. Drop files here to move them to the parent folder.")
@@ -567,10 +666,10 @@ def run_app() -> int:
             self.refresh_btn = QPushButton("Refresh")
             self.refresh_btn.setToolTip("Rescan this folder and drop selected entries that no longer exist.")
             self.refresh_btn.clicked.connect(self.refresh_clicked)
-            self.folder_lbl = QLabel()
+            self.folder_lbl = PathLabel()
             nav.addWidget(self.up_btn)
-            nav.addWidget(self.refresh_btn)
             nav.addWidget(self.folder_lbl, 1)
+            nav.addWidget(self.refresh_btn)
             left.addLayout(nav)
             self.browser = TagBrowser()
             self.browser.tag_dropped.connect(lambda tag, path: self.later(self.apply_tag, tag, path))
@@ -580,7 +679,7 @@ def run_app() -> int:
             self.drop_zone = DropZone("Drop here to put files in the current folder")
             self.drop_zone.setAlignment(Qt.AlignCenter)
             self.drop_zone.setAccessibleName("Current folder drop target")
-            self.drop_zone.setStyleSheet("border: 1px dashed #888888; padding: 6px; color: #555555;")
+            self.drop_zone.setStyleSheet(f"border: 1px dashed {COLORS['control']}; border-radius: 8px; padding: 12px; color: {COLORS['secondary']};")
             self.drop_zone.target = lambda: str(self.state["current"]) if self.state else None
             self.drop_zone.check, self.drop_zone.dropped = self.drop_allowed, self.record_drop
             left.addWidget(self.drop_zone)
@@ -589,9 +688,10 @@ def run_app() -> int:
                           "Shift+click adds a range. Drag rows onto a folder or Up to move them; drag "
                           "Recent downloads onto a folder to copy them.")
             hint.setWordWrap(True)
+            hint.setProperty("role", "support")
             left.addWidget(hint)
             self.bin_btn = QPushButton("Recent downloads")
-            self.bin_btn.setIcon(QIcon(str(resource_path(BIN_ICON))))
+            decorate(self.bin_btn, "recent-downloads")
             self.bin_btn.setAccessibleName("Recent downloads bin")
             self.bin_btn.setToolTip("Files Chrome finished downloading in the last hour. Opening this never "
                                     "changes or deletes them.")
@@ -620,13 +720,14 @@ def run_app() -> int:
             bin_lay.addLayout(bin_row)
             self.bin_panel.setVisible(False)
             left.addWidget(self.bin_panel)
-            left.addWidget(QLabel("Name tags (this folder)"))
+            left.addWidget(heading("Name tags · this folder"))
             tag_row = QHBoxLayout()
             self.tag_edit = QLineEdit()
             self.tag_edit.setPlaceholderText("New tag, e.g. assignment")
             self.tag_edit.setAccessibleName("New tag name")
             self.tag_edit.returnPressed.connect(self.add_tag)
-            self.tag_add_btn = QPushButton("+")
+            self.tag_add_btn = decorate(QPushButton(""), "add")
+            self.tag_add_btn.setFixedWidth(40)
             self.tag_add_btn.setAccessibleName("Add tag")
             self.tag_add_btn.clicked.connect(self.add_tag)
             tag_row.addWidget(self.tag_edit, 1)
@@ -635,23 +736,36 @@ def run_app() -> int:
             self.chip_box = QWidget()
             self.chip_row = QHBoxLayout(self.chip_box)
             self.chip_row.setContentsMargins(0, 0, 0, 0)
-            left.addWidget(self.chip_box)
+            self.chip_row.setAlignment(Qt.AlignLeft)
+            chip_scroll = QScrollArea()
+            chip_scroll.setWidgetResizable(True)
+            chip_scroll.setFixedHeight(60)
+            chip_scroll.setWidget(self.chip_box)
+            left.addWidget(chip_scroll)
             self.tag_note = QLabel("")
             self.tag_note.setWordWrap(True)
-            self.tag_note.setStyleSheet("color: #666666; font-size: 11px;")
+            self.tag_note.setProperty("role", "support")
             left.addWidget(self.tag_note)
-            body.addLayout(left, 3)
+            body.addWidget(left_panel)
 
-            right = QVBoxLayout()
-            self.selected_lbl = QLabel("Selected Inputs (0)")
+            right_panel = QWidget()
+            right_panel.setProperty("panel", True)
+            right_panel.setMinimumWidth(336)
+            right_panel.setMaximumWidth(440)
+            right = QVBoxLayout(right_panel)
+            right.setContentsMargins(16, 16, 16, 16)
+            right.setSpacing(12)
+            self.selected_lbl = heading("Selected Inputs (0)")
+            self.selected_lbl.setWordWrap(True)
             right.addWidget(self.selected_lbl)
             self.selected_list = QListWidget()
+            self.selected_list.setFixedHeight(120)
             right.addWidget(self.selected_list)
             modes = QHBoxLayout()
             self.mode_group = QButtonGroup(page)
             self.mode_stack = QStackedWidget()
             for i, label in enumerate(("Organize", "Make me")):
-                b = QPushButton(label)
+                b = decorate(QPushButton(label), "organize" if i == 0 else "make-me")
                 b.setCheckable(True)
                 self.mode_group.addButton(b, i)
                 modes.addWidget(b)
@@ -660,14 +774,18 @@ def run_app() -> int:
             org_page = QWidget()
             org = QVBoxLayout(org_page)
             self.action_btns = {}
-            grid = QHBoxLayout()
+            grid = QGridLayout()
+            grid.setSpacing(12)
+            order = ["wrap", "rip", "super_wrap", "copy", "paste", "delete"]
             for action, label in ORGANIZE_ACTIONS:
-                b = QPushButton(label)
+                b = decorate(QPushButton(label), action)
+                b.setProperty("destructive", action == "delete")
                 if action == "super_wrap":
                     b.setToolTip("Wrap into a new folder, grouping files by shared name parts such as Cal_1_...")
                 b.clicked.connect(lambda _=False, a=action: self.organize(a))
                 self.action_btns[action] = b
-                grid.addWidget(b)
+                pos = order.index(action)
+                grid.addWidget(b, pos // 2, pos % 2)
             org.addLayout(grid)
             rip_help = QLabel(f"Rip: {RIP_HELP}")
             rip_help.setWordWrap(True)
@@ -676,6 +794,7 @@ def run_app() -> int:
             make_page = QWidget()
             right_outer, right = right, QVBoxLayout(make_page)
             right.setContentsMargins(0, 0, 0, 0)
+            right.setSpacing(8)
             right.addWidget(QLabel("Output type"))
             self.output_type = QComboBox()
             self.output_type.addItems([tasks.STUDY_PLAN, tasks.SINGLE_FILE])
@@ -702,7 +821,7 @@ def run_app() -> int:
             self.efficient_box.setChecked(False)
             self.efficient_note = QLabel(EFFICIENT_NOTE)
             self.efficient_note.setWordWrap(True)
-            self.efficient_note.setStyleSheet("color: #666666; font-size: 11px;")
+            self.efficient_note.setProperty("role", "support")
             right.addWidget(self.efficient_box)
             right.addWidget(self.efficient_note)
             self.output_type.currentTextChanged.connect(self.output_type_changed)
@@ -711,38 +830,67 @@ def run_app() -> int:
             self.output_type_changed(tasks.SINGLE_FILE)
             self.eligibility_lbl = QLabel("")
             self.eligibility_lbl.setWordWrap(True)
-            self.eligibility_lbl.setStyleSheet("color: #b91c1c;")
+            self.eligibility_lbl.setStyleSheet(f"color: {COLORS['error']}; font-size: 13px;")
             right.addWidget(self.eligibility_lbl)
-            self.generate_btn = QPushButton("Generate")
+            form_scroll = QScrollArea()
+            form_scroll.setWidgetResizable(True)
+            form_scroll.setWidget(make_page)
+            self.save_lbl = PathLabel("Save to: Workshop root")
+            self.save_lbl.setProperty("role", "support")
+            self.generate_btn = decorate(QPushButton("Generate"), "generate", True)
             self.generate_btn.clicked.connect(self.generate)
-            right.addWidget(self.generate_btn)
+
             row = QHBoxLayout()
             self.open_doc_btn = QPushButton("Open document")
             self.open_folder_btn = QPushButton("Open output folder")
             self.open_doc_btn.clicked.connect(self.open_document)
             self.open_folder_btn.clicked.connect(self.open_output_folder)
+            decorate(self.open_doc_btn, "notes")
+            decorate(self.open_folder_btn, "folder")
             row.addWidget(self.open_doc_btn)
             row.addWidget(self.open_folder_btn)
-            right.addLayout(row)
             right.addStretch(1)
             self.mode_stack.addWidget(org_page)
-            self.mode_stack.addWidget(make_page)
+            self.mode_stack.addWidget(form_scroll)
+            right_outer.addWidget(self.save_lbl)
+            right_outer.addWidget(self.generate_btn)
+            right_outer.addLayout(row)
             self.mode_group.idClicked.connect(self.mode_changed)
             self.mode_group.button(1).setChecked(True)  # Make me by default, for continuity
             self.mode_stack.setCurrentIndex(1)
-            self.status = QLabel("")
+            self.status = StatusLabel("")
+            self.status.setTextFormat(Qt.PlainText)
             self.status.setWordWrap(True)
             self.status.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            right_outer.addWidget(self.status)
-            body.addLayout(right_outer, 2)
-            lay.addLayout(body)
+            progress = QProgressBar()
+            progress.setRange(0, 0)
+            progress.setTextVisible(False)
+            progress.setAccessibleName("Operation in progress")
+            progress.setVisible(False)
+            self.status.progress = progress
+            right_outer.addWidget(progress)
+            details = QScrollArea()
+            details.setWidgetResizable(True)
+            details.setMaximumHeight(160)
+            details.setWidget(self.status)
+            self.status.details = details
+            details.setVisible(False)
+            right_outer.addWidget(details)
+            body.addWidget(right_panel)
+            body.setStretchFactor(0, 1)
+            body.setStretchFactor(1, 0)
+            body.setSizes([720, 400])
+            lay.addWidget(body, 1)
+            for button, name in ((self.up_btn, "up-one-level"), (self.refresh_btn, "refresh"),
+                                 (self.bin_copy_btn, "copy-to-folder")):
+                decorate(button, name)
             return page
 
         def output_type_changed(self, output_type):
             self.task_box.blockSignals(True)
             self.task_box.clear()
             for task_id, label in tasks.tasks_for(output_type):
-                self.task_box.addItem(label, task_id)
+                self.task_box.addItem(icon(task_id), label, task_id)
             self.task_box.blockSignals(False)
             if output_type == tasks.SINGLE_FILE:
                 self.task_box.setCurrentIndex(self.task_box.findData("summary"))
@@ -769,7 +917,7 @@ def run_app() -> int:
             self.state = state
             self.last_paths = []
             self.status.setText("")
-            self.root_lbl.setText(f"Workshop: {state['root']}")
+            self.root_lbl.setText(f"{state['root'].name}   ·   {state['root']}")
             self.load_tags()
             self.refresh()
             self.reload_bin()  # startup reconciliation; the tray itself stays closed
@@ -791,7 +939,8 @@ def run_app() -> int:
                 self.anchor = None  # a range never spans folders
             self.row_paths = [str(e["path"]) for e in entries]
             rel = workshops.relative(self.state, self.state["current"])
-            self.folder_lbl.setText(f"Current folder: {'/' if rel == '.' else rel}")
+            self.folder_lbl.setText('Workshop root' if rel == '.' else rel)
+            self.save_lbl.setText(f"Save to: {'Workshop root' if rel == '.' else rel}")
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
             self.browser.hot = None  # its row widget is about to be deleted
             self.browser.clear()
@@ -806,14 +955,20 @@ def run_app() -> int:
                              + (", selected" if e["selected"] else ""))
                 row = QWidget()
                 hl = QHBoxLayout(row)
-                hl.setContentsMargins(4, 0, 4, 0)
+                hl.setContentsMargins(8, 4, 8, 4)
+                hl.setSpacing(8)
                 box = QCheckBox()
                 box.setChecked(e["selected"])
                 box.setAccessibleName(f"Select {e['name']}")
                 box.setToolTip("Select or deselect")
                 box.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                     self.later(self.row_clicked, p, d, True, QApplication.keyboardModifiers()))
-                name = QPushButton(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
+                name = QPushButton(e["name"])
+                if e["is_dir"]:
+                    decorate(name, "folder")
+                name.setMinimumWidth(0)
+                name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+                name.setToolTip(e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
                 name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"] else f"Select {e['name']}")
@@ -825,9 +980,9 @@ def run_app() -> int:
                 if not supported:
                     name.setToolTip("Organize can use this file; Make me can't (PDF, PPTX, DOCX, TXT, MD only).")
                 if e["selected"]:
-                    row.setStyleSheet(f"background: {SELECTED_BG}; color: {SELECTED_FG};")
+                    row.setStyleSheet(f"background: {SELECTED_BG}; color: {SELECTED_FG}; border-radius: 8px;")
                 elif not supported:
-                    name.setStyleSheet("text-align: left; color: #888888;")
+                    name.setStyleSheet(f"text-align: left; color: {COLORS['muted']};")
                 hl.addWidget(box)
                 hl.addWidget(name, 1)
                 item.setSizeHint(row.sizeHint())
@@ -852,13 +1007,17 @@ def run_app() -> int:
                 item.setData(Qt.AccessibleTextRole, f"Selected {kind}{rel}")
                 row = QWidget()
                 hl = QHBoxLayout(row)
-                hl.setContentsMargins(4, 0, 4, 0)
-                lbl = QLabel(kind + rel)
+                hl.setContentsMargins(8, 4, 8, 4)
+                hl.setSpacing(8)
+                lbl = PathLabel(kind + rel)
+                lbl.setTextFormat(Qt.PlainText)
                 lbl.setToolTip(str(p))
                 if p in status["blockers"] and self.mode_stack.currentIndex() == 1:
-                    lbl.setStyleSheet("color: #b91c1c;")  # reason is in the eligibility note and tooltip
+                    lbl.setStyleSheet(f"color: {COLORS['error']};")  # reason is in the eligibility note and tooltip
                     lbl.setToolTip(f"{p}\nMake me can't use this: {status['blockers'][p]}")
-                remove = QPushButton("Remove")
+                remove = decorate(QPushButton(""), "remove-selection")
+                remove.setFixedSize(32, 32)
+                remove.setStyleSheet("padding: 4px; min-height: 0;")
                 remove.setAccessibleName(f"Remove {rel} from selection")
                 remove.setToolTip("Deselect only; the file or folder is not deleted.")
                 remove.clicked.connect(lambda _=False, q=str(p): self.later(self.remove_selected, q))
@@ -870,9 +1029,10 @@ def run_app() -> int:
             files = len(selected) - folders
             self.selected_lbl.setText(f"Selected Inputs ({len(selected)}: {files} file{'s' * (files != 1)}, "
                                       f"{folders} folder{'s' * (folders != 1)})")
-            self.eligibility_lbl.setText(status["message"] if status["blockers"] else "")
+            self.eligibility_lbl.setText(status["message"])
             busy = self.thread is not None or self.org_thread is not None
             self.generate_btn.setEnabled(status["ok"] and not busy)
+            self.generate_btn.setVisible(self.mode_stack.currentIndex() == 1)
             for action, b in self.action_btns.items():
                 b.setEnabled(not busy)
             self.update_bin_buttons()
@@ -939,7 +1099,8 @@ def run_app() -> int:
             for tag in current:
                 self.chip_row.addWidget(TagChip(tag))
                 rm = QPushButton("x")
-                rm.setFixedWidth(22)
+                rm.setFixedWidth(32)
+                rm.setStyleSheet("padding: 4px; min-height: 22px;")
                 rm.setAccessibleName(f"Remove tag {tag}")
                 rm.setToolTip(f"Remove the {tag} tag (its numbering is remembered)")
                 rm.clicked.connect(lambda _=False, t=tag: self.later(self.remove_tag, t))
@@ -1275,7 +1436,6 @@ def run_app() -> int:
                         Path(p).relative_to(root).as_posix() for p in result["paths"]))
                 if result.get("warnings"):
                     self.status.setText(self.status.text() + "\n" + "\n".join(w["message"] for w in result["warnings"]))
-                self.open_document()
             else:
                 self.status.setText(describe_error(result["error"]))
             if self.state:
@@ -1291,6 +1451,7 @@ def run_app() -> int:
                 QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
     app = QApplication.instance() or QApplication([])
+    apply_theme(app)
     app.setApplicationName("Late Night Pal")
     win = Window()
     win.show()
