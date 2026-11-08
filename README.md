@@ -15,7 +15,7 @@ If a name is taken, the new output gets a suffix: `summary (2).pdf` or `Study Sc
 ## Prerequisites (Windows)
 
 - Python 3.11+
-- [MiKTeX](https://miktex.org/download) with `lualatex` on PATH. The app checks for it before making any API call.
+- [MiKTeX](https://miktex.org/download) with `lualatex` on PATH. The app checks for it before making any API call. Gemini writes each PDF's body in LaTeX using the packages in `rendering.ALLOWED_PACKAGES`; install them beforehand (`siunitx` and `mhchem` are not in a basic MiKTeX; the command is at the end of `latex-packages.txt`), because the compiler runs restricted and cannot reliably install packages on the fly.
 - A Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 ## Setup
@@ -92,7 +92,7 @@ Build from the repository root (about 1½ minutes):
 1. Install [MiKTeX](https://miktex.org/download) and make sure `lualatex` is on PATH. Compile something once so MiKTeX finishes installing its packages and fonts before the demo.
 2. Extract the ZIP anywhere. A short path such as `C:\Demo` is safest.
 3. Provide the Gemini key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
-4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 15 bundled resources (prompts, templates and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
+4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 16 bundled resources (prompts, templates, the LaTeX read guard and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
 
 The executable is windowed. Command-line modes print to the PowerShell window they were started from.
 

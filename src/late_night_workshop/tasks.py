@@ -38,16 +38,9 @@ TASKS = {
                          "roles": ["sample-questions"], "layout": {"kind": "single", "filename": "sample-questions.pdf"}},
 }
 
-BLOCK_SCHEMA = {
-    "type": "object",
-    "required": ["kind"],
-    "properties": {
-        "kind": {"type": "string", "enum": ["heading", "paragraph", "list", "question"]},
-        "text": {"type": "string"},
-        "items": {"type": "array", "items": {"type": "string"}},
-        "label": {"type": "string"},
-    },
-}
+# One document's content: a LaTeX body that Python wraps in its own preamble (rendering.py).
+DOCUMENT_SCHEMA_PROPERTIES = {"latex_code": {"type": "string"}}
+REPAIR_SCHEMA = {"type": "object", "required": ["latex_code"], "properties": DOCUMENT_SCHEMA_PROPERTIES}
 
 
 class TaskError(AppError):
@@ -92,9 +85,9 @@ def validate_parameters(task_id: str, parameters: dict) -> dict:
 
 
 def _schema(roles: list[str], count: int) -> dict:
-    doc = {"type": "object", "required": ["role", "day", "title", "blocks"],
+    doc = {"type": "object", "required": ["role", "day", "title", "latex_code"],
            "properties": {"role": {"type": "string", "enum": roles}, "day": {"type": "integer"},
-                          "title": {"type": "string"}, "blocks": {"type": "array", "items": BLOCK_SCHEMA}}}
+                          "title": {"type": "string"}, **DOCUMENT_SCHEMA_PROPERTIES}}
     alloc = {"type": "object", "required": ["day", "topics", "workload_minutes", "source_ids"],
              "properties": {"day": {"type": "integer"}, "topics": {"type": "array", "items": {"type": "string"}},
                             "workload_minutes": {"type": "integer"},
@@ -104,6 +97,11 @@ def _schema(roles: list[str], count: int) -> dict:
                            "allocation": {"type": "array", "items": alloc}}}
 
 
+def package_list() -> str:
+    from .rendering import ALLOWED_PACKAGES
+    return ", ".join(f"{n} ({o})" if o else n for n, o in ALLOWED_PACKAGES)
+
+
 def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
     spec = TASKS[task_id]
     index = "\n".join(f"- Source {i}: {s['source_id']}"
@@ -111,7 +109,7 @@ def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
                       for i, s in enumerate(sources, 1))
     body = resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", "")))
     style = resource_path("prompts/" + STYLES[params["language_style"]]).read_text(encoding="utf-8")
-    fmt = resource_path("prompts/format.md").read_text(encoding="utf-8")
+    fmt = resource_path("prompts/format.md").read_text(encoding="utf-8").replace("{packages}", package_list())
     return (f"You are a study assistant.\n\nAttached sources (each document is preceded by its source label):\n"
             f"{index}\n\n{body}\n\n{style}\n\n{fmt}")
 

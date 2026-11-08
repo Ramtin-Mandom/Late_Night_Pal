@@ -7,13 +7,15 @@ request = {"workshop_root", "destination", "selected_paths", "task_id", "paramet
 Components are passed in through `deps` so each boundary can be swapped for a stub.
 Recovery is bounded and every extra Gemini request is announced in progress:
   - transient network failure: one automatic retry of the same request
-  - response fails validation: one schema-repair request (previous JSON + the problem, no sources)
-  - cheat sheet over one page: one condensation request
-Local compile/publish failures never trigger a Gemini call; they fail with the document named,
-and nothing is published (rendering happens in a temp dir, publishing is all-or-nothing).
+  - bundle fails the JSON contract (roles, days, counts, allocation): one bundle repair
+    (previous JSON + the problem, no sources)
+  - a document fails its own checks (unsafe LaTeX, missing day heading/source label), does not
+    compile, or compiles to too many pages: one targeted repair of that document only
+    (its latex_code + the problem, no sources); documents that passed are never regenerated
+Publish failures never call Gemini. Nothing is published until every document has passed:
+rendering happens in a temp dir and publishing is all-or-nothing.
 """
 
-import json
 import tempfile
 import time
 from datetime import date
@@ -32,13 +34,18 @@ DEFAULT_DEPS = {
     "publish": outputs.publish,
 }
 
-CONDENSE_PROMPT = """The cheat sheet below rendered to {pages} pages but must fit on exactly one page.
-Rewrite it shorter: keep the most exam-relevant definitions, formulas and distinctions, cut everything
-else, and use terse list items. Aim for about 60% of the current length. Keep the same JSON format
-(one document with role `cheat-sheet`, day 0, empty allocation).
+DOCUMENT_REPAIR_PROMPT = """One document of your previous response cannot be used: {problem}
 
-Current cheat sheet JSON:
-{bundle}"""
+Return JSON {{"latex_code": "..."}} with the complete corrected body of this document only.
+Fix that problem and keep the content, structure and language otherwise. Follow the task and
+LaTeX rules below exactly.
+
+Document: role {role}, day {day}, title {title!r}
+
+{task_prompt}
+
+Current latex_code:
+{latex_code}"""
 
 REPAIR_PROMPT = """Your previous JSON response could not be used: {problem}.
 Return the complete corrected JSON for the same task, fixing that problem and keeping all other
@@ -98,6 +105,30 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
                 e2.message += " (also after one repair attempt)"
                 raise e2
 
+    def repair_document(doc, failure, task, bundle, sources, work_dir, subtitle, names):
+        """The one targeted repair for a failed document: ask, recheck, recompile; else fail the job."""
+        label = names[doc["document_id"]]
+        progress("generating", f"{failure['message']}; asking Gemini once to fix that document...")
+        repair_task = dict(task, response_schema=tasks.REPAIR_SCHEMA, prompt=DOCUMENT_REPAIR_PROMPT.format(
+            problem=failure["problem"], role=doc["role"], day=doc["day"] or 0, title=doc["title"],
+            task_prompt=task["prompt"], latex_code=doc["latex_code"]))
+        response = ask_gemini(repair_task, [], f"repairing {label}")
+        fixed = dict(doc, latex_code=validation.parse_document_repair(response["raw_text"]))
+        problems = validation.document_problems(fixed, task, sources)
+        if problems:
+            raise validation.ValidationError(
+                "invalid_response", f"{label} is unusable: {'; '.join(problems)} (also after one repair attempt)")
+        doc.update(fixed)
+        progress("rendering", f"Compiling repaired {label}...")
+        result = timed("render_s", d["render_bundle"], dict(bundle, documents=[doc]), task, work_dir, subtitle,
+                       None, names)
+        if result["records"]:
+            return result["records"][0]
+        again = result["failures"][doc["document_id"]]
+        log = f"LaTeX log: {again['log']}" if again.get("log") else ""
+        raise rendering.RenderError(again["code"], f"{again['message']} (also after one repair attempt).",
+                                    "\n".join(x for x in (again["problem"], log) if x), source_id=label)
+
     try:
         tasks.validate_parameters(request.get("task_id"), request.get("parameters"))  # before any work
         if not request.get("selected_paths"):
@@ -142,20 +173,21 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
 
         with tempfile.TemporaryDirectory(prefix="lnp_job_") as work_dir:
             n = len(bundle["documents"])
+            failures = {}
+            for doc in bundle["documents"]:
+                problems = validation.document_problems(doc, task, sources)
+                if problems:
+                    failures[doc["document_id"]] = {"code": "invalid_response", "message": names[doc["document_id"]]
+                                                    + " is unusable", "problem": "; ".join(problems), "log": ""}
             progress("rendering", f"Compiling {n} PDF{'s' if n > 1 else ''} locally...")
-            try:
-                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle, on_document, names)
-            except rendering.RenderError as e:
-                if e.code != "page_limit_exceeded":
-                    raise
-                progress("generating", "Cheat sheet is longer than one page; asking Gemini to condense it once...")
-                doc = bundle["documents"][0]
-                condensed_task = dict(task, prompt=CONDENSE_PROMPT.format(
-                    pages=e.details, bundle=json.dumps({"documents": [{**doc, "day": 0}], "allocation": []})))
-                response = ask_gemini(condensed_task, [], "condensing the cheat sheet")
-                bundle = validation.validate_bundle(response["raw_text"], task, sources)  # no further repair
-                progress("rendering", "Compiling condensed cheat sheet...")
-                rendered = timed("render_s", d["render_bundle"], bundle, task, work_dir, subtitle, on_document, names)
+            ready = dict(bundle, documents=[x for x in bundle["documents"] if x["document_id"] not in failures])
+            result = timed("render_s", d["render_bundle"], ready, task, work_dir, subtitle, on_document, names)
+            records = {r["document_id"]: r for r in result["records"]}
+            failures.update(result["failures"])
+            for doc in [x for x in bundle["documents"] if x["document_id"] in failures]:
+                records[doc["document_id"]] = repair_document(doc, failures[doc["document_id"]], task, bundle,
+                                                              sources, work_dir, subtitle, names)
+            rendered = [records[x["document_id"]] for x in bundle["documents"]]
             progress("publishing", f"Saving {len(rendered)} PDF{'s' if len(rendered) > 1 else ''}...")
             published = timed("publish_s", d["publish"], rendered, task, checked["destination"], checked["root"])
         return {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,

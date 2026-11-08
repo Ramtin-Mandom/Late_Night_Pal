@@ -16,7 +16,7 @@ a = Analysis(
     [str(root / "packaging" / "launcher.py")],
     pathex=[str(root / "src")],
     datas=[(str(pkg / "prompts"), "late_night_workshop/prompts"),        # 8 task prompts, format.md, styles/
-           (str(pkg / "templates"), "late_night_workshop/templates"),   # document.tex, cheat-sheet.tex
+           (str(pkg / "templates"), "late_night_workshop/templates"),   # document.tex, cheat-sheet.tex, guard.lua
            (str(pkg / "assets"), "late_night_workshop/assets")]         # recent-downloads-bin.svg (Qt loads it via qsvg)
           + collect_data_files("pptx") + collect_data_files("docx"),    # converter package data (XML templates)
     hiddenimports=collect_submodules("late_night_workshop") + collect_submodules("pptx") + collect_submodules("docx")

@@ -1,8 +1,11 @@
 """Turn untrusted model text into the only bundle the renderer accepts.
 
-Checks the whole bundle against the task's expected roles, days and counts,
-plus task-specific rules (schedule day headings, file-guide coverage, daily
-allocation, answer-key labels). Any failure rejects the entire bundle.
+validate_bundle() checks the JSON contract for the whole bundle: expected roles, days and
+counts, a non-empty latex_code per document, distinct daily notes and the planning
+allocation. Any failure there rejects the entire bundle (one bundle repair in generation).
+document_problems() checks one document: the static LaTeX safety rules (latex_problems) and
+task-specific content (schedule day headings, file-guide coverage). Those failures, like
+compile and page-count failures, get one targeted repair of that document only.
 """
 
 import json
@@ -10,7 +13,22 @@ import re
 
 from . import AppError
 
-TEXT_KINDS = {"heading", "paragraph"}
+MAX_LATEX_CHARS = 200_000
+
+# Generated bodies may not touch the preamble, files, Lua, catcodes, or build command names
+# indirectly. \begin{x} runs \x, so environment names are checked against the same set.
+FORBIDDEN_COMMANDS = frozenset("""
+documentclass usepackage RequirePackage RequirePackageWithOptions LoadClass ProvidesPackage document
+input include includeonly InputIfFileExists IfFileExists endinput openin openout read readline write
+immediate newwrite newread closein closeout special everyjob everyeof
+directlua latelua luaexec luadirect luacode luaescapestring luafunction
+csname ifcsname UseName UseExpandableName ExpandArgs csuse csdef cslet expandafter
+catcode lccode uccode scantokens scantextokens ExplSyntaxOn makeatletter
+pdfextension pdfvariable pdffeedback pdfobj pdfliteral saveimageresource useimageresource includegraphics
+filecontents verbatiminput lstinputlisting usetikzlibrary pgfplotstableread
+""".split())
+_COMMAND = re.compile(r"\\([A-Za-z]+)")
+_ENVIRONMENT = re.compile(r"\\(?:begin|end)\s*\{\s*([^}]*)\}")
 
 
 class ValidationError(AppError):
@@ -21,55 +39,52 @@ def _invalid(msg: str):
     return ValidationError("invalid_response", f"Gemini returned an unusable response: {msg}", retryable=True)
 
 
-def _clean_blocks(blocks, where: str) -> list[dict]:
-    if not isinstance(blocks, list) or not blocks:
-        raise _invalid(f"{where} has no content")
-    clean = []
-    for b in blocks:
-        if not isinstance(b, dict):
-            raise _invalid(f"{where} has a block that is not an object")
-        kind = b.get("kind")
-        text = b.get("text").strip() if isinstance(b.get("text"), str) else ""
-        if kind in TEXT_KINDS:
-            if text:
-                clean.append({"kind": kind, "text": text})
-        elif kind == "list":
-            items = [i.strip() for i in b.get("items") or [] if isinstance(i, str) and i.strip()]
-            if items:
-                clean.append({"kind": "list", "items": items})
-        elif kind == "question":
-            label = b.get("label").strip() if isinstance(b.get("label"), str) else ""
-            if not label or not text:
-                raise _invalid(f"{where} has a question without a label or text")
-            clean.append({"kind": "question", "label": label, "text": text})
-        else:
-            raise _invalid(f"{where} has unknown block kind {kind!r}")
-    if not clean:
-        raise _invalid(f"{where} is empty")
-    return clean
+def latex_problems(code: str) -> list[str]:
+    """Static safety check of one document body; [] when it may be compiled."""
+    problems = []
+    if len(code) > MAX_LATEX_CHARS:
+        problems.append(f"latex_code is longer than {MAX_LATEX_CHARS} characters")
+    if "^^" in code:
+        problems.append("the ^^ character notation is not allowed")
+    names = set(_COMMAND.findall(code)) | {n.strip().rstrip("*") for n in _ENVIRONMENT.findall(code)}
+    bad = sorted(n for n in names if n in FORBIDDEN_COMMANDS)
+    if bad:
+        problems.append("these commands or environments are not allowed: " + ", ".join("\\" + n for n in bad))
+    return problems
 
 
-def _label_answers(blocks: list[dict]) -> list[dict]:
-    """Sample questions: if the 'Answers' section came back as unlabelled paragraphs/list items and
-    their count matches the questions, give each answer its question's label (Q1, Q2, ...)."""
-    idx = next((i for i, b in enumerate(blocks) if b["kind"] == "heading" and b["text"].lower().startswith("answer")), None)
-    if idx is None:
-        return blocks
-    labels = [b["label"] for b in blocks[:idx] if b["kind"] == "question"]
-    tail = blocks[idx + 1:]
-    if not labels or any(b["kind"] in ("question", "heading") for b in tail):
-        return blocks
-    answers = [x for b in tail for x in (b["items"] if b["kind"] == "list" else [b["text"]])]
-    if len(answers) != len(labels):
-        return blocks
-    return blocks[:idx + 1] + [{"kind": "question", "label": l, "text": a} for l, a in zip(labels, answers)]
+def plain(code: str) -> str:
+    """latex_code with escaped specials undone, for finding names such as Lectures/a_b.pdf."""
+    code = re.sub(r"\\(?:textunderscore|_)(?:\{\})?", "_", code)
+    code = re.sub(r"\\allowbreak\b|\\-|\\[,;:! ]", "", code)
+    return re.sub(r"\\([&%#$])", r"\1", code)
 
 
-def _doc_text(doc: dict) -> str:
-    parts = []
-    for b in doc["blocks"]:
-        parts += [b.get("label", ""), b.get("text", "")] + b.get("items", [])
-    return "\n".join(parts)
+def document_problems(doc: dict, task: dict, sources: list[dict]) -> list[str]:
+    """Per-document checks before compiling; each problem is phrased for Gemini to fix."""
+    problems = latex_problems(doc["latex_code"])
+    text = plain(doc["latex_code"])
+    if doc["role"] == "schedule" and task["layout"]["kind"] == "schedule":
+        missing = [n for n in task["expected"]["days"] if not re.search(rf"\bDay\s*~?0*{n}\b", text, re.I)]
+        if missing:
+            problems.append(f"the schedule has no heading for Day {missing[0]}")
+    if doc["role"] == "file-guide":
+        for sid in sorted(s["source_id"] for s in sources):
+            if sid not in text:
+                problems.append(f"the file guide does not mention the exact source label {sid}")
+    return problems
+
+
+def parse_document_repair(raw_text: str) -> str:
+    """A targeted repair returns {"latex_code": "..."} for one document."""
+    try:
+        data = json.loads(raw_text or "")
+    except json.JSONDecodeError:
+        raise _invalid("the repaired document was not valid JSON")
+    code = data.get("latex_code") if isinstance(data, dict) else None
+    if not isinstance(code, str) or not code.strip():
+        raise _invalid("the repaired document has no latex_code")
+    return code.strip()
 
 
 def _check_allocation(raw, days: list[int], source_ids: set) -> list[dict]:
@@ -113,10 +128,11 @@ def validate_bundle(raw_text: str, task: dict, sources: list[dict]) -> dict:
         day = raw.get("day") if isinstance(raw.get("day"), int) and not isinstance(raw.get("day"), bool) else None
         where = f"{role} (day {day})" if kind == "daily" else str(role)
         title = raw.get("title").strip() if isinstance(raw.get("title"), str) and raw["title"].strip() else task["label"]
-        blocks = _clean_blocks(raw.get("blocks"), where)
-        if role == "sample-questions":
-            blocks = _label_answers(blocks)
-        docs.append({"role": role, "day": day if kind == "daily" else None, "title": title, "blocks": blocks})
+        code = raw.get("latex_code")
+        if not isinstance(code, str) or not code.strip():
+            raise _invalid(f"{where} has no latex_code")
+        docs.append({"role": role, "day": day if kind == "daily" else None, "title": title,
+                     "latex_code": code.strip()})
 
     if kind == "daily":
         want = {(d, r) for d in expected["days"] for r in expected["roles_per_day"]}
@@ -128,7 +144,7 @@ def validate_bundle(raw_text: str, task: dict, sources: list[dict]) -> dict:
             extra = sorted(set(got) - want, key=str)
             raise _invalid(f"missing {missing[0][1]} for day {missing[0][0]}" if missing
                            else f"unexpected document {extra[0][1]} for day {extra[0][0]}")
-        notes = [_doc_text(d) for d in docs if d["role"] == "notes"]
+        notes = [d["latex_code"] for d in docs if d["role"] == "notes"]
         if len(notes) > 1 and len(set(notes)) < len(notes):
             raise _invalid("two days have identical notes")
         for d in docs:
@@ -143,19 +159,6 @@ def validate_bundle(raw_text: str, task: dict, sources: list[dict]) -> dict:
     allocation = []
     if kind in ("daily", "schedule"):
         allocation = _check_allocation(data.get("allocation"), expected["days"], source_ids)
-    if kind == "schedule":
-        by_role = {d["role"]: d for d in docs}
-        headings = [b["text"] for b in by_role["schedule"]["blocks"] if b["kind"] == "heading"]
-        for n in expected["days"]:
-            if not any(re.match(rf"day\s*0*{n}\b", h, re.I) for h in headings):
-                raise _invalid(f"schedule has no heading for Day {n}")
-        guide = _doc_text(by_role["file-guide"])
-        for sid in sorted(source_ids):
-            if sid not in guide:
-                raise _invalid(f"file guide does not mention {sid}")
-    if task["task_id"] == "answer-key":
-        if not any(b["kind"] == "question" for b in docs[0]["blocks"]) and len(docs[0]["blocks"]) > 1:
-            raise _invalid("answer key has no labelled answers")
 
     order = {r: i for i, r in enumerate(expected.get("roles") or expected.get("roles_per_day"))}
     docs.sort(key=lambda d: (d["day"] or 0, order[d["role"]]))

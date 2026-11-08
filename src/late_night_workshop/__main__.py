@@ -48,7 +48,7 @@ def main() -> int:
         ok = True
         rels = [t["prompt_file"] for t in tasks.TASKS.values()] + ["prompts/" + s for s in tasks.STYLES.values()]
         from .ui import BIN_ICON
-        for rel in rels + ["prompts/format.md", "templates/document.tex", "templates/cheat-sheet.tex", BIN_ICON]:
+        for rel in rels + ["prompts/format.md", "templates/document.tex", "templates/cheat-sheet.tex", "templates/guard.lua", BIN_ICON]:
             found = resource_path(rel).is_file()
             ok &= found
             print(f"resource {rel}: {'ok' if found else 'MISSING'}")
