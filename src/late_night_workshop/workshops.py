@@ -130,6 +130,26 @@ def toggle_selection(state: dict, path) -> bool:
     return True
 
 
+def select_range(state: dict, ordered, anchor, target) -> list[Path]:
+    """Shift+click: add every row from anchor to target (inclusive, in the listed order) to the shared
+    selection; never deselects. Without the anchor in the list only target is added.
+    Rows that can't be selected (links, gone) are skipped. Returns the added paths."""
+    keys = [os.path.normcase(str(Path(p).resolve())) for p in ordered]
+    t = os.path.normcase(str(Path(target).resolve()))
+    a = os.path.normcase(str(Path(anchor).resolve())) if anchor is not None else t
+    if t not in keys:
+        return []
+    i, j = keys.index(t), keys.index(a) if a in keys else keys.index(t)
+    added = []
+    for p in list(ordered)[min(i, j):max(i, j) + 1]:
+        rp = Path(p).resolve()
+        if rp in state["selected"] or is_link(p) or rp == state["root"] or not rp.exists():
+            continue
+        state["selected"].add(rp)
+        added.append(rp)
+    return added
+
+
 def deselect(state: dict, path) -> bool:
     """Remove one entry by its canonical path, even if it is missing or outside the current view.
     Never touches the file. Returns whether anything was removed."""

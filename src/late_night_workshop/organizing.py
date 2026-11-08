@@ -35,7 +35,8 @@ from pathlib import Path
 
 from . import AppError, super_wrap, tasks, workshops
 
-ACTIONS = ("delete", "rip", "wrap", "copy", "paste", "super_wrap", "rename")  # rename: name-tag drop
+ACTIONS = ("delete", "rip", "wrap", "copy", "paste", "super_wrap", "rename", "move")  # rename: tag drop; move: file drag
+DROP_EFFECTS = ("move", "copy")  # browser rows are moved; Recent downloads rows are copied
 STATUSES = ("completed", "failed", "unattempted")
 CHANGES = ("moved", "copied", "deleted", "copied_source_kept")
 
@@ -48,13 +49,15 @@ class OrganizeError(AppError):
         self.paths = [str(p) for p in paths]
 
 
-def capture_request(state: dict, action: str, parameters: dict | None = None, sources=None) -> dict:
+def capture_request(state: dict, action: str, parameters: dict | None = None, sources=None,
+                    destination=None) -> dict:
     """Snapshot root, current folder and selection at click time (mirrors ui.build_request).
-    sources overrides the selection for actions aimed at one entry (a name-tag drop)."""
+    sources overrides the selection for actions aimed at one entry (a name-tag drop) or a dragged set;
+    destination overrides the current folder for a drop on a folder row or on Up."""
     return {
         "action": action,
         "workshop_root": str(state["root"]),
-        "destination": str(state["current"]),
+        "destination": str(state["current"] if destination is None else destination),
         "sources": [str(p) for p in (workshops.selected_sorted(state) if sources is None else sources)],
         "parameters": dict(parameters or {}),
     }
@@ -379,7 +382,22 @@ def _plan_rename(root: Path, request: dict) -> dict:
     return _plan("rename", root, dest, [_item(src, target, "move")])
 
 
-_PLANNERS = {"wrap": _plan_wrap, "rename": _plan_rename, "super_wrap": _plan_super_wrap, "rip": _plan_rip, "delete": _plan_delete,
+def _plan_move(root: Path, request: dict) -> dict:
+    """Dragged workshop entries -> another workshop folder (rename on the same volume, verified copy +
+    remove across volumes). Collisions get 'name (2)'; nothing is overwritten. No cut record: every source
+    is inside the workshop and the executor rechecks each item before moving it."""
+    dest = preflight_destination(root, request["destination"])
+    sources = preflight_sources(root, request["sources"])
+    here = [p for p in sources if os.path.normcase(p.parent) == os.path.normcase(dest)]
+    if here:
+        raise OrganizeError("same_folder", f"{here[0].name} is already in {dest.name or 'this folder'}; nothing was moved.", here)
+    check_not_into_self([{"source": str(p), "destination": str(dest / p.name), "kind": "dir" if p.is_dir() else "file"}
+                         for p in sources])  # before naming, so 'Lectures (2)' inside Lectures can't slip through
+    taken = {c.name.lower() for c in dest.iterdir()}
+    return _plan("move", root, dest, [_item(p, dest / _free_name(dest, p.name, taken), "move") for p in sources])
+
+
+_PLANNERS = {"move": _plan_move, "wrap": _plan_wrap, "rename": _plan_rename, "super_wrap": _plan_super_wrap, "rip": _plan_rip, "delete": _plan_delete,
              "copy": _plan_copy, "paste": _plan_paste}
 
 
@@ -392,6 +410,52 @@ def plan_action(request: dict) -> dict:
     if not root.is_dir():
         raise OrganizeError("missing_workshop", f"Workshop folder not found: {root}", [root])
     return _PLANNERS[action](root, request)
+
+
+# ---------- drag and drop (Qt-free; ui.py only starts drags and finds targets) ----------
+
+def drop_sources(selected, pressed) -> list[str]:
+    """What a drag carries: the whole selection when the pressed row is selected, else only that row."""
+    key = os.path.normcase(str(pressed))
+    chosen = [str(p) for p in selected]
+    return chosen if any(os.path.normcase(p) == key for p in chosen) else [str(pressed)]
+
+
+def drop_problem(sources, destination) -> str | None:
+    """Cheap hover check (no tree walk) used for the forbidden cursor; plan_drop repeats it and
+    plan_action does the full validation. None = the target looks valid."""
+    if not sources:
+        return "Nothing to drop."
+    d = Path(destination)
+    if not d.is_dir() or _is_link(d):
+        return "Drop on a folder."
+    dk = os.path.normcase(str(d.resolve()))
+    for s in sources:
+        sk = os.path.normcase(str(Path(s).resolve()))
+        if os.path.normcase(str(Path(sk).parent)) == dk:
+            return f"{Path(s).name} is already in that folder."
+        if dk == sk or dk.startswith(sk.rstrip("\\/") + os.sep):
+            return "A folder cannot be moved into itself."
+    return None
+
+
+def drop_request(state: dict, effect: str, sources, destination) -> dict:
+    """move: workshop entries (the move planner); copy: Recent downloads (the paste-copy planner that
+    the bin's Copy to current folder button uses), aimed at the drop target."""
+    if effect not in DROP_EFFECTS:
+        raise OrganizeError("unknown_action", f"Unknown drop effect '{effect}'.")
+    if effect == "move":
+        return capture_request(state, "move", sources=list(dict.fromkeys(map(str, sources))), destination=destination)
+    clip = {"paths": list(dict.fromkeys(map(str, sources))), "effect": "copy"}
+    return capture_request(state, "paste", {"clipboard": clip}, sources=[], destination=destination)
+
+
+def plan_drop(state: dict, effect: str, sources, destination) -> dict:
+    """All-or-nothing preflight for one drop: the hover rules, then the normal planner. Raises OrganizeError."""
+    problem = drop_problem(sources, destination)
+    if problem:
+        raise OrganizeError("invalid_drop", problem, [destination])
+    return plan_action(drop_request(state, effect, sources, destination))
 
 
 def label(plan_or_root, path) -> str:

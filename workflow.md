@@ -14,7 +14,7 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 
 1. Click the name `[folder] Lectures` to open it, then tick `topic.pdf` (or click its name) → `toggle_selection()`. The row turns blue and **Selected Inputs** shows `Lectures/topic.pdf` with a **Remove** button.
 2. **Up**, `[folder] Readings`, `topic.pdf` → Selected Inputs lists both relative paths.
-3. The selection survives navigation, mode and task changes. Ticking a folder's checkbox selects the folder without opening it. Any file type can be selected (types Make me can't use are greyed). **Remove** deselects an entry from any view, even one deleted on disk; it never deletes the file.
+3. The selection survives navigation, mode and task changes. Ticking a folder's checkbox selects the folder without opening it. Any file type can be selected (types Make me can't use are greyed). **Remove** deselects an entry from any view, even one deleted on disk; it never deletes the file. **Ctrl+click** a row toggles it (a folder too, without opening it); **Shift+click** adds every row from the last clicked one to this one. A plain click never clears other selections.
 4. **Up**, `[folder] Revision`: this is the destination captured at Generate.
 
 **Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
@@ -30,6 +30,16 @@ Each button snapshots root, current folder and selection at the click (`organizi
 5. Cut files in File Explorer, then **Paste** here and confirm. If an item fails, the status shows which moved, which failed and which were not attempted; the rest stay where they were. Paste the same cut again to finish: moved items are skipped. Network (UNC) sources are refused for cut; copy them instead.
 
 6. Select `Cal_1_assignment_1.pdf`, `Cal_1_Note_1.pdf`, `Cal_1_assignment_2.pdf` (and optionally `Cal_2_assignment_1.pdf` or a folder), open the destination folder, **Super Wrap**, name `Calculus`. The confirmation lists every source → destination. The result is `Calculus/Cal_1/assignment/1.pdf` and `2.pdf`, `Calculus/Cal_1/Note_1.pdf`, and singletons and folders directly in `Calculus` with their names unchanged. A name clash anywhere in the new tree, or a name Windows forbids, refuses the whole run before anything moves.
+
+## Drag and drop (move and copy)
+
+Same engine as the buttons (`organizing.plan_drop` → `plan_action` → `OrganizeWorker` → `execute_plan` → `reconcile` → refresh). No dialog; the status line reports the result.
+
+1. In the root, select `a.pdf`, Shift+click `c.txt` (selects `a.pdf`, `b.pdf`, `c.txt`), then drag any of them a few pixels: the drag shows "-> Move 3 files". Hover `[folder] Lectures`: it turns amber. Drop → status "Moved 3 files to Lectures."; the rows leave the root and the selection follows them.
+2. Drag an **unselected** row: only that row moves. Drag onto **Up** to move it to the parent folder, or onto the dashed "Drop here…" box (or empty space in the list) for the folder you're viewing.
+3. Hovering the file's own folder, the dragged folder itself or a folder inside it shows the forbidden cursor; a drop there does nothing. If a name is taken the moved entry becomes `a (2).pdf`; nothing is overwritten.
+4. Open **Recent downloads**, drag a row (or a ticked row, which carries every ticked row) onto `[folder] Labs` → "+ Copy: hw1.pdf", then "Copied 1 download to Labs." The original stays where Chrome saved it; Chrome's history is not touched. A download deleted since the list loaded is refused ("Copy not done: … is no longer available.") and the list reloads.
+5. Press Esc during a drag → "Drag cancelled. Nothing was changed." While a move or copy runs, new drags are refused until it finishes.
 
 ## Recent downloads bin (P2-M6)
 

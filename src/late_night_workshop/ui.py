@@ -4,6 +4,7 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 `generation.generate()` (run on a worker thread) owns the job.
 """
 
+import json
 import threading
 import time
 from pathlib import Path
@@ -16,6 +17,9 @@ ORGANIZE_ACTIONS = [("delete", "Delete"), ("rip", "Rip"), ("wrap", "Wrap"), ("co
                     ("super_wrap", "Super Wrap")]
 RIP_HELP = "Move each selected folder's contents up one level."
 TAG_MIME = "application/x-late-night-pal-tag"
+MOVE_MIME = "application/x-late-night-pal-move"  # browser rows; internal only (no file URLs, so Explorer can't take them)
+COPY_MIME = "application/x-late-night-pal-downloads"  # Recent downloads rows
+DROP_MIME = {"move": MOVE_MIME, "copy": COPY_MIME}
 BIN_ICON = "assets/recent-downloads-bin.svg"
 
 
@@ -23,7 +27,7 @@ def describe_download(record: dict) -> str:
     """Tray row: filename, where it was saved, and Chrome's completion time (local clock)."""
     p = Path(record["path"])
     return f"{p.name}   ·   {p.parent}   ·   {time.strftime('%H:%M', time.localtime(record['downloaded_at']))}"
-ACTION_VERB = {"rename": "Name tag", "wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
+ACTION_VERB = {"move": "Move", "rename": "Name tag", "wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -121,9 +125,36 @@ def describe_outcomes(result: dict) -> str:
     return "\n".join(lines)
 
 
+def drag_label(effect: str, paths) -> str:
+    """Text on the drag pixmap: the filename for one entry, 'N files' (or items) for several."""
+    verb = "Move" if effect == "move" else "Copy"
+    if len(paths) == 1:
+        return f"{verb}: {Path(paths[0]).name}"
+    noun = "downloads" if effect == "copy" else ("files" if all(not Path(p).is_dir() for p in paths) else "items")
+    return f"{verb} {len(paths)} {noun}"
+
+
+def describe_drop(result: dict, effect: str) -> str:
+    """One-line success status for a drop ('Moved 3 files to Lectures'); anything else gets the full report."""
+    out = result.get("outcomes") or []
+    if result.get("status") != "ok" or not out:
+        return describe_outcomes(result)
+    n = len(out)
+    folders = sum(o["kind"] == "dir" for o in out)
+    if effect == "copy":
+        noun = f"download{'s' * (n != 1)}"
+    else:
+        noun = (f"file{'s' * (n != 1)}" if not folders else f"folder{'s' * (n != 1)}" if folders == n else "items")
+    dest = Path(out[0]["destination"]).parent
+    where = dest.name or str(dest)
+    renamed = sum(Path(o["destination"]).name != Path(o["source"]).name for o in out)
+    tail = f" ({renamed} renamed to avoid a name clash)" if renamed else ""
+    return f"{'Moved' if effect == 'move' else 'Copied'} {n} {noun} to {where}{tail}."
+
+
 def run_app() -> int:
-    from PySide6.QtCore import QMimeData, QObject, Qt, QThread, QTimer, QUrl, Signal
-    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QIcon
+    from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, Qt, QThread, QTimer, QUrl, Signal
+    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFontMetrics, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
                                    QInputDialog, QLabel, QLineEdit,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
@@ -188,28 +219,199 @@ def run_app() -> int:
             result["root"] = self.plan["root"]
             self.finished.emit(result)
 
+    HOT_STYLE = "background: #fde68a; color: #111111; border: 2px solid #d97706;"
+
+    def drop_payload(md):
+        """(effect, paths) for one of our file drags, else None."""
+        for effect, fmt in DROP_MIME.items():
+            if md.hasFormat(fmt):
+                try:
+                    return effect, json.loads(bytes(md.data(fmt)).decode("utf-8"))
+                except ValueError:
+                    return None
+        return None
+
+    def drag_pixmap(effect, paths):
+        text = ("-> " if effect == "move" else "+ ") + drag_label(effect, paths)
+        fm = QFontMetrics(QApplication.font())
+        pm = QPixmap(fm.horizontalAdvance(text) + 20, fm.height() + 12)
+        pm.fill(QColor("#2563eb" if effect == "move" else "#15803d"))
+        painter = QPainter(pm)
+        painter.setPen(QColor("#ffffff"))
+        painter.drawText(pm.rect(), Qt.AlignCenter, text)
+        painter.end()
+        return pm
+
+    def set_hot(widget, hot):
+        """Highlight a drop target; the widget's own style is kept in a property and restored."""
+        if widget is None:
+            return
+        if widget.property("lnpBaseStyle") is None:
+            widget.setProperty("lnpBaseStyle", widget.styleSheet())
+        widget.setStyleSheet(HOT_STYLE if hot else widget.property("lnpBaseStyle"))
+
+    class DropTargets:
+        """Mixin for the Up button and the current-folder zone. target() -> folder path or None;
+        check(md, folder) -> bool decides the cursor; dropped(md, folder) records the drop."""
+        target = check = dropped = None
+
+        def _init_drop(self):
+            self.setAcceptDrops(True)
+
+        def _ok(self, e):
+            dest = self.target() if self.target else None
+            return dest if dest and drop_payload(e.mimeData()) is not None and self.check(e.mimeData(), dest) else None
+
+        def _hover(self, e):
+            ok = self._ok(e) is not None
+            e.acceptProposedAction() if ok else e.ignore()  # ignore = forbidden cursor
+            set_hot(self, ok)
+
+        def dragEnterEvent(self, e):
+            self._hover(e)
+
+        def dragMoveEvent(self, e):
+            self._hover(e)
+
+        def dragLeaveEvent(self, e):
+            set_hot(self, False)
+
+        def dropEvent(self, e):
+            set_hot(self, False)
+            dest = self._ok(e)
+            if dest is None:
+                return e.ignore()
+            e.acceptProposedAction()
+            self.dropped(e.mimeData(), dest)
+
+    class DropButton(DropTargets, QPushButton):
+        def __init__(self, text):
+            QPushButton.__init__(self, text)
+            self._init_drop()
+
+    class DropZone(DropTargets, QLabel):
+        def __init__(self, text):
+            QLabel.__init__(self, text)
+            self._init_drop()
+
+    class RowDragFilter(QObject):
+        """Starts a browser drag only after the platform drag distance, so clicks and double-clicks on a
+        row keep their select/open behaviour. Rows carry their path in the lnpPath property."""
+
+        def __init__(self, start):
+            super().__init__()
+            self.start = start
+            self.origin = None
+
+        def eventFilter(self, obj, e):
+            t = e.type()
+            if t == QEvent.MouseButtonPress and e.button() == Qt.LeftButton:
+                self.origin = e.globalPosition().toPoint()
+            elif t == QEvent.MouseMove and self.origin is not None and e.buttons() & Qt.LeftButton:
+                if (e.globalPosition().toPoint() - self.origin).manhattanLength() >= QApplication.startDragDistance():
+                    self.origin = None
+                    if isinstance(obj, QPushButton):
+                        obj.setDown(False)  # the release goes to the drag, so the press must not become a click
+                    self.start(obj.property("lnpPath"), obj)
+                    return True
+            elif t == QEvent.MouseButtonRelease:
+                self.origin = None
+            return False
+
     class TagBrowser(QListWidget):
-        """Folder browser that accepts a name-tag chip dropped on a row."""
+        """Folder browser: accepts a name-tag chip on a file row, and file drags (move from this list,
+        copy from Recent downloads) on folder rows; empty space and file rows mean the current folder."""
         tag_dropped = Signal(str, str)  # tag, path of the row ("" for empty space)
+        current_folder = check = dropped = None  # set by Window
 
         def __init__(self):
             super().__init__()
             self.setAcceptDrops(True)
             self.viewport().setAcceptDrops(True)
+            self.hot = None
+
+        def target_at(self, pos):
+            """(folder path, row widget or None) under the pointer."""
+            item = self.itemAt(pos)
+            if item is not None and item.data(PATH_ROLE + 1) == "dir":
+                return item.data(PATH_ROLE), self.itemWidget(item)
+            return str(self.current_folder()), None
+
+        def set_hot_row(self, row):
+            if row is not self.hot:
+                set_hot(self.hot, False)
+                self.hot = row
+                set_hot(row, True)
+
+        def autoscroll(self, pos):
+            sb, h = self.verticalScrollBar(), self.viewport().height()
+            if pos.y() < 24:
+                sb.setValue(sb.value() - 1)
+            elif pos.y() > h - 24:
+                sb.setValue(sb.value() + 1)
 
         def dragEnterEvent(self, e):
-            e.acceptProposedAction() if e.mimeData().hasFormat(TAG_MIME) else e.ignore()
+            self.dragMoveEvent(e)
 
         def dragMoveEvent(self, e):
-            e.acceptProposedAction() if e.mimeData().hasFormat(TAG_MIME) else e.ignore()
+            md = e.mimeData()
+            if md.hasFormat(TAG_MIME):
+                return e.acceptProposedAction()
+            if drop_payload(md) is None:
+                return e.ignore()
+            pos = e.position().toPoint()
+            self.autoscroll(pos)
+            dest, row = self.target_at(pos)
+            if self.check(md, dest):
+                e.acceptProposedAction()
+                self.set_hot_row(row)
+            else:
+                e.ignore()  # forbidden cursor
+                self.set_hot_row(None)
+
+        def dragLeaveEvent(self, e):
+            self.set_hot_row(None)
 
         def dropEvent(self, e):
-            if not e.mimeData().hasFormat(TAG_MIME):
-                return e.ignore()
-            item = self.itemAt(e.position().toPoint())
-            e.acceptProposedAction()
-            self.tag_dropped.emit(bytes(e.mimeData().data(TAG_MIME)).decode("utf-8"),
-                                  item.data(PATH_ROLE) if item else "")
+            self.set_hot_row(None)
+            md = e.mimeData()
+            if md.hasFormat(TAG_MIME):
+                item = self.itemAt(e.position().toPoint())
+                e.acceptProposedAction()
+                return self.tag_dropped.emit(bytes(md.data(TAG_MIME)).decode("utf-8"),
+                                             item.data(PATH_ROLE) if item else "")
+            dest, _ = self.target_at(e.position().toPoint())
+            if drop_payload(md) is not None and self.check(md, dest):
+                e.acceptProposedAction()
+                self.dropped(md, dest)
+            else:
+                e.ignore()
+
+    class BinList(QListWidget):
+        """Recent downloads rows; dragging past the drag distance starts a copy drag (start(path)),
+        a click still ticks the checkbox."""
+        start = None
+
+        def __init__(self):
+            super().__init__()
+            self.origin = None
+
+        def mousePressEvent(self, e):
+            self.origin = e.position().toPoint() if e.button() == Qt.LeftButton else None
+            super().mousePressEvent(e)
+
+        def mouseMoveEvent(self, e):
+            if self.origin is not None and e.buttons() & Qt.LeftButton and \
+                    (e.position().toPoint() - self.origin).manhattanLength() >= QApplication.startDragDistance():
+                item = self.itemAt(self.origin)
+                self.origin = None
+                if item is not None and self.start:
+                    return self.start(item.data(PATH_ROLE))
+            super().mouseMoveEvent(e)
+
+        def mouseReleaseEvent(self, e):
+            self.origin = None
+            super().mouseReleaseEvent(e)
 
     class TagChip(QPushButton):
         """A draggable chip; dragging copies the tag name, the chip itself stays."""
@@ -243,6 +445,11 @@ def run_app() -> int:
             self.bin_thread = None
             self.bin_worker = None
             self.bin_records = []
+            self.anchor = None  # Shift+click range start (a row of the folder shown)
+            self.row_paths = []
+            self.dropped = None  # (effect, paths, folder) recorded by a drop target during drag.exec
+            self.pending_drop = None
+            self.row_filter = RowDragFilter(self.start_browser_drag)
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -343,7 +550,11 @@ def run_app() -> int:
             body = QHBoxLayout()
             left = QVBoxLayout()
             nav = QHBoxLayout()
-            self.up_btn = QPushButton("Up")
+            self.up_btn = DropButton("Up")
+            self.up_btn.setToolTip("Open the parent folder. Drop files here to move them to the parent folder.")
+            self.up_btn.target = lambda: (str(self.state["current"].parent)
+                                          if self.state and self.state["current"] != self.state["root"] else None)
+            self.up_btn.check, self.up_btn.dropped = self.drop_allowed, self.record_drop
             self.up_btn.clicked.connect(self.go_up)
             self.refresh_btn = QPushButton("Refresh")
             self.refresh_btn.setToolTip("Rescan this folder and drop selected entries that no longer exist.")
@@ -355,9 +566,20 @@ def run_app() -> int:
             left.addLayout(nav)
             self.browser = TagBrowser()
             self.browser.tag_dropped.connect(lambda tag, path: self.later(self.apply_tag, tag, path))
+            self.browser.current_folder = lambda: self.state["current"]
+            self.browser.check, self.browser.dropped = self.drop_allowed, self.record_drop
             left.addWidget(self.browser)
+            self.drop_zone = DropZone("Drop here to put files in the current folder")
+            self.drop_zone.setAlignment(Qt.AlignCenter)
+            self.drop_zone.setAccessibleName("Current folder drop target")
+            self.drop_zone.setStyleSheet("border: 1px dashed #888888; padding: 6px; color: #555555;")
+            self.drop_zone.target = lambda: str(self.state["current"]) if self.state else None
+            self.drop_zone.check, self.drop_zone.dropped = self.drop_allowed, self.record_drop
+            left.addWidget(self.drop_zone)
             hint = QLabel("Tick the box to select a file or folder. Click a folder's name to open it; "
-                          "clicking a file's name also selects it.")
+                          "clicking a file's name also selects it. Ctrl+click toggles without opening, "
+                          "Shift+click adds a range. Drag rows onto a folder or Up to move them; drag "
+                          "Recent downloads onto a folder to copy them.")
             hint.setWordWrap(True)
             left.addWidget(hint)
             self.bin_btn = QPushButton("Recent downloads")
@@ -373,7 +595,8 @@ def run_app() -> int:
             self.bin_note = QLabel("")
             self.bin_note.setWordWrap(True)
             bin_lay.addWidget(self.bin_note)
-            self.bin_list = QListWidget()
+            self.bin_list = BinList()
+            self.bin_list.start = self.start_download_drag
             self.bin_list.setAccessibleName("Recent downloads; tick the ones to copy")
             self.bin_list.setMaximumHeight(140)
             self.bin_list.itemChanged.connect(lambda *_: self.update_bin_buttons())
@@ -554,10 +777,15 @@ def run_app() -> int:
 
         def refresh(self, folder=None):
             """Redraw the current folder. Never changes the selection (only Refresh prunes)."""
+            before = self.state["current"]
             entries = workshops.browse(self.state, folder)
+            if self.state["current"] != before:
+                self.anchor = None  # a range never spans folders
+            self.row_paths = [str(e["path"]) for e in entries]
             rel = workshops.relative(self.state, self.state["current"])
             self.folder_lbl.setText(f"Current folder: {'/' if rel == '.' else rel}")
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
+            self.browser.hot = None  # its row widget is about to be deleted
             self.browser.clear()
             for e in entries:
                 path = str(e["path"])
@@ -575,16 +803,17 @@ def run_app() -> int:
                 box.setChecked(e["selected"])
                 box.setAccessibleName(f"Select {e['name']}")
                 box.setToolTip("Select or deselect")
-                box.clicked.connect(lambda _=False, p=path: self.later(self.toggle, p))
+                box.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
+                                    self.later(self.row_clicked, p, d, True, QApplication.keyboardModifiers()))
                 name = QPushButton(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
-                if e["is_dir"]:
-                    name.setAccessibleName(f"Open folder {e['name']}")
-                    name.clicked.connect(lambda _=False, p=path: self.later(self.open_folder, p))
-                else:
-                    name.setAccessibleName(f"Select {e['name']}")
-                    name.clicked.connect(lambda _=False, p=path: self.later(self.toggle, p))
+                name.setAccessibleName(f"Open folder {e['name']}" if e["is_dir"] else f"Select {e['name']}")
+                name.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
+                                     self.later(self.row_clicked, p, d, False, QApplication.keyboardModifiers()))
+                for w in (row, name):  # drag starts here; the checkbox stays a plain checkbox
+                    w.setProperty("lnpPath", path)
+                    w.installEventFilter(self.row_filter)
                 if not supported:
                     name.setToolTip("Organize can use this file; Make me can't (PDF, PPTX, DOCX, TXT, MD only).")
                 if e["selected"]:
@@ -641,6 +870,17 @@ def run_app() -> int:
             self.update_bin_buttons()
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
+
+        def row_clicked(self, path, is_dir, from_box, mods):
+            """Plain click keeps the existing behaviour (box or file name toggles, folder name opens);
+            Ctrl+click toggles any row without opening it; Shift+click adds anchor..row to the selection."""
+            if mods & Qt.ShiftModifier and self.anchor is not None:
+                workshops.select_range(self.state, self.row_paths, self.anchor, path)
+                return self.refresh()
+            if is_dir and not from_box and not mods & Qt.ControlModifier:
+                return self.open_folder(path)
+            self.anchor = path
+            self.toggle(path)
 
         def toggle(self, path):
             try:
@@ -786,7 +1026,7 @@ def run_app() -> int:
                     if self.bin_list.item(i).checkState() == Qt.Checked]
 
         def update_bin_buttons(self):
-            busy = self.thread is not None or self.org_thread is not None
+            busy = self.busy()
             self.bin_copy_btn.setEnabled(bool(self.ticked_downloads()) and not busy)
 
         def copy_downloads(self):
@@ -808,6 +1048,63 @@ def run_app() -> int:
                                     f"\n\n{shown}", QMessageBox.Ok | QMessageBox.Cancel) != QMessageBox.Ok:
                 self.status.setText("Cancelled. Nothing was copied.")
                 return
+            self.run_plan(plan)
+
+        # ---------- drag and drop: this UI starts drags and finds targets; organizing.plan_drop validates ----------
+        def busy(self):
+            return self.thread is not None or self.org_thread is not None
+
+        def drop_allowed(self, md, folder):
+            """Hover check behind the cursor and highlight; plan_drop repeats it with full validation."""
+            payload = drop_payload(md)
+            if payload is None or self.busy() or not self.state or not workshops.is_inside(self.state["root"], Path(folder)):
+                return False
+            return organizing.drop_problem(payload[1], folder) is None
+
+        def record_drop(self, md, folder):
+            """Called inside drag.exec; the plan runs after the drag loop returns (rows may be rebuilt)."""
+            effect, paths = drop_payload(md)
+            self.dropped = (effect, paths, folder)
+
+        def run_drag(self, source, effect, paths):
+            if self.busy():
+                self.status.setText("Wait for the current operation to finish before dragging.")
+                return
+            md = QMimeData()
+            md.setData(DROP_MIME[effect], json.dumps(paths).encode("utf-8"))
+            drag = QDrag(source)
+            drag.setMimeData(md)
+            drag.setPixmap(drag_pixmap(effect, paths))
+            drag.setHotSpot(QPoint(-14, -8))  # label sits beside the cursor, not under it
+            self.dropped = None
+            drag.exec(Qt.MoveAction if effect == "move" else Qt.CopyAction)
+            dropped, self.dropped = self.dropped, None
+            if dropped is None:
+                self.status.setText("Drag cancelled. Nothing was changed.")
+                return
+            self.later(self.handle_drop, *dropped)
+
+        def start_browser_drag(self, path, source):
+            paths = organizing.drop_sources(workshops.selected_sorted(self.state), path)
+            self.run_drag(source, "move", paths)
+
+        def start_download_drag(self, path):
+            self.run_drag(self.bin_list, "copy", organizing.drop_sources(self.ticked_downloads(), path))
+
+        def handle_drop(self, effect, paths, folder):
+            """One drop -> plan_drop (all-or-nothing preflight) -> the organizer worker."""
+            if self.busy():
+                return
+            verb = "Move" if effect == "move" else "Copy"
+            try:
+                plan = organizing.plan_drop(self.state, effect, paths, folder)
+            except organizing.OrganizeError as e:
+                shown = "\n".join(organizing.label(self.state["root"], p) for p in e.paths)
+                self.status.setText(f"{verb} not done: {e.message}" + (f"\n{shown}" if shown else ""))
+                if effect == "copy":
+                    self.reload_bin()  # a vanished download leaves the tray
+                return
+            self.pending_drop = effect
             self.run_plan(plan)
 
         def refresh_clicked(self):
@@ -885,6 +1182,7 @@ def run_app() -> int:
                 except name_tags.TagError as e:
                     tag_note = "\n" + e.message
             self.pending_tag = None
+            drop, self.pending_drop = self.pending_drop, None
             if result["action"] == "paste":
                 self.reload_bin()  # import reconciliation: drop expired or missing entries
             try:
@@ -892,7 +1190,7 @@ def run_app() -> int:
             except Exception:
                 pass  # clipboard trouble must not hide the file report
             self.refresh()
-            self.status.setText(describe_outcomes(result) + tag_note)
+            self.status.setText((describe_drop(result, drop) if drop else describe_outcomes(result)) + tag_note)
 
         # ---------- generation ----------
         def generate(self):
