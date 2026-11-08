@@ -298,9 +298,10 @@ def run_app() -> int:
         """Starts a browser drag only after the platform drag distance, so clicks and double-clicks on a
         row keep their select/open behaviour. Rows carry their path in the lnpPath property."""
 
-        def __init__(self, start):
+        def __init__(self, start, open_row):
             super().__init__()
             self.start = start
+            self.open_row = open_row  # double-click
             self.origin = None
 
         def eventFilter(self, obj, e):
@@ -314,6 +315,12 @@ def run_app() -> int:
                         obj.setDown(False)  # the release goes to the drag, so the press must not become a click
                     self.start(obj.property("lnpPath"), obj)
                     return True
+            elif t == QEvent.MouseButtonDblClick and e.button() == Qt.LeftButton:
+                self.origin = None
+                if isinstance(obj, QPushButton):
+                    obj.setDown(False)  # no second click
+                self.open_row(obj.property("lnpPath"))
+                return True
             elif t == QEvent.MouseButtonRelease:
                 self.origin = None
             return False
@@ -449,7 +456,8 @@ def run_app() -> int:
             self.row_paths = []
             self.dropped = None  # (effect, paths, folder) recorded by a drop target during drag.exec
             self.pending_drop = None
-            self.row_filter = RowDragFilter(self.start_browser_drag)
+            self.row_filter = RowDragFilter(self.start_browser_drag, lambda p: self.later(self.open_row, p))
+            self.last_dir_click = None  # folder toggled by the first click of a double-click
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -576,8 +584,8 @@ def run_app() -> int:
             self.drop_zone.target = lambda: str(self.state["current"]) if self.state else None
             self.drop_zone.check, self.drop_zone.dropped = self.drop_allowed, self.record_drop
             left.addWidget(self.drop_zone)
-            hint = QLabel("Tick the box to select a file or folder. Click a folder's name to open it; "
-                          "clicking a file's name also selects it. Ctrl+click toggles without opening, "
+            hint = QLabel("Click a file or folder (or tick its box) to select it; double-click a folder to open it. "
+                          "Ctrl+click toggles without opening, "
                           "Shift+click adds a range. Drag rows onto a folder or Up to move them; drag "
                           "Recent downloads onto a folder to copy them.")
             hint.setWordWrap(True)
@@ -808,7 +816,7 @@ def run_app() -> int:
                 name = QPushButton(f"[folder] {e['name']}" if e["is_dir"] else e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
-                name.setAccessibleName(f"Open folder {e['name']}" if e["is_dir"] else f"Select {e['name']}")
+                name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"] else f"Select {e['name']}")
                 name.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                      self.later(self.row_clicked, p, d, False, QApplication.keyboardModifiers()))
                 for w in (row, name):  # drag starts here; the checkbox stays a plain checkbox
@@ -872,15 +880,26 @@ def run_app() -> int:
             self.open_folder_btn.setEnabled(bool(self.last_paths))
 
         def row_clicked(self, path, is_dir, from_box, mods):
-            """Plain click keeps the existing behaviour (box or file name toggles, folder name opens);
-            Ctrl+click toggles any row without opening it; Shift+click adds anchor..row to the selection."""
+            """Click (box or name, file or folder) toggles; Ctrl+click too; Shift+click adds anchor..row.
+            Opening a folder is a double-click (open_row)."""
             if mods & Qt.ShiftModifier and self.anchor is not None:
                 workshops.select_range(self.state, self.row_paths, self.anchor, path)
                 return self.refresh()
-            if is_dir and not from_box and not mods & Qt.ControlModifier:
-                return self.open_folder(path)
             self.anchor = path
+            self.last_dir_click = path if is_dir and not from_box else None
             self.toggle(path)
+
+        def open_row(self, path):
+            """Double-click: open a folder, undoing the toggle its first click made."""
+            if not path or not Path(path).is_dir():
+                return
+            if self.last_dir_click == path:
+                try:
+                    workshops.toggle_selection(self.state, path)
+                except workshops.WorkshopError:
+                    pass
+            self.last_dir_click = None
+            self.open_folder(path)
 
         def toggle(self, path):
             try:

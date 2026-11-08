@@ -42,7 +42,7 @@ UI changes widgets and delegates path/selection truth to workshop helpers. Debug
 
 | UI event | Call | Effect |
 | --- | --- | --- |
-| Click a folder name | `browse(state, folder)` | Navigate only; selection unchanged |
+| Double-click a folder name (a single click toggles it, like its checkbox) | `browse(state, folder)` | Navigate only; selection unchanged |
 | Row checkbox on a file or folder; clicking a file's name | `toggle_selection` | Add/remove one canonical path |
 | Remove button beside a Selected Inputs entry (both modes; accessible name = relative path) | `deselect(state, path)` | Discard by canonical key even when missing or outside the current view; never touches the file |
 | Refresh button | `prune(state)` then `browse()` | Drop selected paths that no longer exist (reported in the status), move `current` to its nearest surviving folder |
