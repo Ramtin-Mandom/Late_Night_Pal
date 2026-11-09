@@ -1,5 +1,7 @@
 # Application workflow
 
+The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search) is implemented; PDF page selection, generation history and study progress are pending.
+
 Current state: M7. The same flow runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
 Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
@@ -19,7 +21,9 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 
 **Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
 
-**Refresh** (beside Up) rescans the folder and drops selected entries that no longer exist, naming them in the status. Ordinary redraws never drop selections. ## Organize (P2-M3; use a disposable workshop)
+**Search (P3-M1).** Type `topic` in the search field above the browser. After a short pause the browser lists every matching file and folder name in the workshop by relative path: `Lectures/topic.pdf`, `Readings/topic.pdf` (`search.search()` on a worker thread; a slower, older search never replaces newer results). Click a result to select it (the same shared selection), double-click a PDF to open it in Chrome or a folder to open it, or **Show in folder** to jump to its folder. The **Save to** folder does not change while results are shown; only navigating does. Clear the box (✕) to return to the current folder with the selection intact. Hidden entries and links are not listed; a folder that can't be read is named in an "incomplete" note.
+
+**Refresh** (beside Up) rescans the folder and drops selected entries that no longer exist, naming them in the status, and reruns an active search. Ordinary redraws never drop selections. ## Organize (P2-M3; use a disposable workshop)
 
 Each button snapshots root, current folder and selection at the click (`organizing.capture_request()`, like Generate's `build_request()`), validates the whole plan, then runs it off the UI thread. The status lists every item as done, FAILED (with the reason) or not attempted; nothing is overwritten.
 

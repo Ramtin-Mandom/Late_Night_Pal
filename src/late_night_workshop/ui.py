@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import downloads, generation, inputs, name_tags, organizing, resource_path, tasks, workshops
+from . import downloads, generation, inputs, name_tags, organizing, resource_path, search, tasks, workshops
 
 from .theme import COLORS
 
@@ -46,6 +46,21 @@ def open_pdf(path) -> bool:
         return False
     subprocess.Popen([chrome, Path(path).resolve().as_uri()], close_fds=True)
     return True
+
+
+SEARCH_DEBOUNCE_MS = 250
+
+
+def search_is_current(request: dict, state: dict | None, query: str, seq: int) -> bool:
+    """A finished search may be shown only if it is the newest request, for the workshop that is
+    open now and the query in the box now (a late or previous-workshop response is dropped)."""
+    return (state is not None and request["seq"] == seq and request["root"] == state["root"]
+            and request["query"] == query.strip())
+
+
+def describe_search(result: dict) -> str:
+    n = len(result["matches"])
+    return f"Search: {n} match{'es' * (n != 1)} for \u201c{result['query']}\u201d"
 
 
 def describe_download(record: dict) -> str:
@@ -278,6 +293,25 @@ def run_app() -> int:
                 result = self.fn()
             except Exception as e:  # the provider never raises; this only keeps the UI alive
                 result = {"records": [], "errors": [f"Unexpected error ({type(e).__name__})."]}
+            self.finished.emit(result)
+
+    class SearchWorker(QObject):
+        """One name search (search.search) off the UI thread; the request rides along in the result."""
+        finished = Signal(dict)
+
+        def __init__(self, request):
+            super().__init__()
+            self.request = request
+            self.cancel = threading.Event()
+
+        def run(self):
+            r = self.request
+            try:
+                result = search.search(r["root"], r["query"], self.cancel.is_set)
+            except Exception as e:  # last-resort guard: report, never hang
+                result = {"query": r["query"], "matches": [], "cancelled": False,
+                          "warnings": [f"Search failed ({type(e).__name__})."]}
+            result["request"] = r
             self.finished.emit(result)
 
     class OrganizeWorker(QObject):
@@ -535,6 +569,9 @@ def run_app() -> int:
             self.pending_drop = None
             self.row_filter = RowDragFilter(self.start_browser_drag, lambda p: self.later(self.open_row, p))
             self.last_dir_click = None  # row toggled by the first click of a double-click
+            self.search_seq = 0  # newest search request; older results are dropped
+            self.search_jobs = {}  # seq -> (QThread, SearchWorker), kept alive until each finishes
+            self.search_result = None  # accepted result being shown; None = folder view
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -596,6 +633,7 @@ def run_app() -> int:
                 self.welcome_art.setVisible(self.width() >= 1040)
 
         def show_start(self):
+            self.clear_search_box()
             self.recent_list.clear()
             recents = workshops.load_recents()
             for r in recents:
@@ -694,6 +732,22 @@ def run_app() -> int:
             nav.addWidget(self.folder_lbl, 1)
             nav.addWidget(self.refresh_btn)
             left.addLayout(nav)
+            self.search_edit = QLineEdit()
+            self.search_edit.setPlaceholderText("Search file and folder names in this workshop")
+            self.search_edit.setAccessibleName("Search workshop names")
+            self.search_edit.setClearButtonEnabled(True)
+            self.search_edit.textChanged.connect(self.search_text_changed)
+            self.search_edit.returnPressed.connect(self.start_search)
+            self.search_timer = QTimer(self)
+            self.search_timer.setSingleShot(True)
+            self.search_timer.setInterval(SEARCH_DEBOUNCE_MS)
+            self.search_timer.timeout.connect(self.start_search)
+            left.addWidget(self.search_edit)
+            self.search_note = QLabel("")
+            self.search_note.setWordWrap(True)
+            self.search_note.setProperty("role", "support")
+            self.search_note.setVisible(False)
+            left.addWidget(self.search_note)
             self.browser = TagBrowser()
             self.browser.tag_dropped.connect(lambda tag, path: self.later(self.apply_tag, tag, path))
             self.browser.current_folder = lambda: self.state["current"]
@@ -940,6 +994,7 @@ def run_app() -> int:
             self.state = state
             self.last_paths = []
             self.status.setText("")
+            self.clear_search_box()  # results and in-flight searches belong to the previous workshop
             self.root_lbl.setText(f"{state['root'].name}   ·   {state['root']}")
             self.load_tags()
             self.refresh()
@@ -955,14 +1010,22 @@ def run_app() -> int:
             QTimer.singleShot(0, lambda: fn(*args))  # rebuild rows after the clicked widget's signal returns
 
         def refresh(self, folder=None):
-            """Redraw the current folder. Never changes the selection (only Refresh prunes)."""
+            """Redraw the current folder, or the accepted search results while a query is shown.
+            Never changes the selection (only Refresh prunes). Navigating to a folder ends the search."""
+            if folder is not None and self.search_edit.text():
+                self.clear_search_box()
             before = self.state["current"]
-            entries = workshops.browse(self.state, folder)
+            entries = workshops.browse(self.state, folder)  # also rechecks the destination folder
             if self.state["current"] != before:
                 self.anchor = None  # a range never spans folders
-            self.row_paths = [str(e["path"]) for e in entries]
             rel = workshops.relative(self.state, self.state["current"])
-            self.folder_lbl.setText('Workshop root' if rel == '.' else rel)
+            searching = self.search_result is not None
+            if searching:
+                entries = [dict(m, selected=m["path"] in self.state["selected"]) for m in self.search_result["matches"]]
+                self.folder_lbl.setText(describe_search(self.search_result))
+            else:
+                self.folder_lbl.setText('Workshop root' if rel == '.' else rel)
+            self.row_paths = [str(e["path"]) for e in entries]
             self.save_lbl.setText(f"Save to: {'Workshop root' if rel == '.' else rel}")
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
             self.browser.hot = None  # its row widget is about to be deleted
@@ -986,12 +1049,12 @@ def run_app() -> int:
                 box.setToolTip("Select or deselect")
                 box.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                     self.later(self.row_clicked, p, d, True, QApplication.keyboardModifiers()))
-                name = QPushButton(e["name"])
+                name = QPushButton(e["relative"] if searching else e["name"])
                 if e["is_dir"]:
                     decorate(name, "folder")
                 name.setMinimumWidth(0)
                 name.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-                name.setToolTip(e["name"])
+                name.setToolTip(e["relative"] if searching else e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
                 name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"]
@@ -1010,6 +1073,12 @@ def run_app() -> int:
                     name.setStyleSheet(f"text-align: left; color: {COLORS['muted']};")
                 hl.addWidget(box)
                 hl.addWidget(name, 1)
+                if searching and not e["is_dir"]:
+                    locate = QPushButton("Show in folder")
+                    locate.setAccessibleName(f"Show {e['relative']} in its folder")
+                    locate.setToolTip("Open the folder that holds this file (it becomes the Save to folder).")
+                    locate.clicked.connect(lambda _=False, p=path: self.later(self.show_in_folder, p))
+                    hl.addWidget(locate)
                 item.setSizeHint(row.sizeHint())
                 self.browser.addItem(item)
                 self.browser.setItemWidget(item, row)
@@ -1079,6 +1148,10 @@ def run_app() -> int:
             if not path:
                 return
             p = Path(path)
+            if not os.path.lexists(p):
+                self.last_dir_click = None
+                self.status.setText(f"Error: {p.name} no longer exists. Click Refresh to update the list.")
+                return
             is_pdf = p.is_file() and p.suffix.lower() == ".pdf"
             if not (p.is_dir() or is_pdf):
                 return
@@ -1094,6 +1167,9 @@ def run_app() -> int:
 
         def view_pdf(self, path):
             self.refresh()  # shows the undone toggle
+            if not Path(path).is_file():
+                self.status.setText(f"Error: {Path(path).name} no longer exists. Click Refresh to update the list.")
+                return
             try:
                 if open_pdf(path):
                     self.status.setText(f"Opened {Path(path).name} in Chrome.")
@@ -1103,6 +1179,92 @@ def run_app() -> int:
                     self.status.setText(f"Error: {Path(path).name} could not be opened (Chrome was not found).")
             except OSError as e:
                 self.status.setText(f"Error: Chrome could not open {Path(path).name} ({type(e).__name__}).")
+
+        # ---------- search (P3-M1): debounce -> SearchWorker -> accept only the newest current result ----------
+        def search_text_changed(self, text):
+            if text.strip():
+                self.search_note.setText("Searching...")
+                self.search_note.setVisible(True)
+                self.search_timer.start()  # restarts on every keystroke
+            else:
+                self.cancel_search()
+                self.search_note.setVisible(False)
+                if self.search_result is not None:
+                    self.search_result = None
+                    self.anchor = None
+                    self.refresh()  # back to the current folder; the selection is untouched
+
+        def cancel_search(self):
+            """Make every in-flight search obsolete; their threads finish (quickly) and are discarded."""
+            self.search_timer.stop()
+            self.search_seq += 1
+            for _, worker in self.search_jobs.values():
+                worker.cancel.set()
+
+        def clear_search_box(self):
+            """Empty the box without a redraw (the caller redraws)."""
+            self.cancel_search()
+            self.search_edit.blockSignals(True)
+            self.search_edit.clear()
+            self.search_edit.blockSignals(False)
+            self.search_result = None
+            self.search_note.setVisible(False)
+
+        def start_search(self):
+            query = self.search_edit.text().strip()
+            if not query or self.state is None:
+                return
+            self.cancel_search()
+            request = {"root": self.state["root"], "query": query, "seq": self.search_seq}
+            thread, worker = QThread(), SearchWorker(request)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.finished.connect(self.search_finished)  # queued onto the UI thread (Window is a QObject)
+            self.search_jobs[request["seq"]] = (thread, worker)
+            self.search_note.setText("Searching...")
+            self.search_note.setVisible(True)
+            thread.start()
+
+        def search_finished(self, result):
+            request = result["request"]
+            thread, _ = self.search_jobs.pop(request["seq"], (None, None))
+            if thread is not None:
+                thread.quit()
+                thread.wait()
+            if result["cancelled"] or not search_is_current(request, self.state, self.search_edit.text(), self.search_seq):
+                return  # obsolete: a newer query, a cleared box or another workshop
+            self.search_result = result
+            self.anchor = None
+            self.search_note.setText("\n".join(result["warnings"]) or (
+                "No matching names." if not result["matches"] else
+                "Click to select; double-click a folder or PDF to open it. Save to stays the current folder."))
+            self.search_note.setVisible(True)
+            self.refresh()
+
+        def show_in_folder(self, path):
+            p = Path(path)
+            if not p.exists() or not p.parent.is_dir():
+                self.status.setText(f"Error: {p.name} no longer exists. Click Refresh to update the results.")
+                return
+            try:
+                self.refresh(p.parent)  # explicit navigation: ends the search, Save to follows
+            except workshops.WorkshopError as e:
+                self.status.setText(f"Error: {e.message}")
+                return
+            for i in range(self.browser.count()):
+                item = self.browser.item(i)
+                if item.data(PATH_ROLE) == str(p.resolve()):
+                    self.browser.setCurrentItem(item)
+                    self.browser.scrollToItem(item)
+                    break
+            self.status.setText(f"Showing {p.name} in {workshops.relative(self.state, p.parent)}.")
+
+        def closeEvent(self, event):
+            self.cancel_search()
+            for thread, _ in list(self.search_jobs.values()):
+                thread.quit()
+                thread.wait()
+            super().closeEvent(event)
 
         def toggle(self, path):
             try:
@@ -1180,6 +1342,9 @@ def run_app() -> int:
                 return
             if not path or Path(path).is_dir():
                 self.status.setText("Drop a tag on a file; nothing was renamed.")
+                return
+            if self.search_result is not None:
+                self.status.setText("Clear the search to tag files; tags belong to the folder shown. Nothing was renamed.")
                 return
             folder = self.state["current"]
             try:
@@ -1335,6 +1500,8 @@ def run_app() -> int:
             self.reload_bin()
             self.load_tags()
             self.refresh()
+            if self.search_edit.text().strip():
+                self.start_search()  # rerun the active query over the current disk state
             if gone:
                 self.status.setText("Refresh removed from the selection (no longer on disk): " + ", ".join(
                     workshops.relative(self.state, p) for p in gone))
@@ -1413,6 +1580,8 @@ def run_app() -> int:
             except Exception:
                 pass  # clipboard trouble must not hide the file report
             self.refresh()
+            if self.search_edit.text().strip():
+                self.start_search()  # moved/deleted entries change the matches
             self.status.setText((describe_drop(result, drop) if drop else describe_outcomes(result)) + tag_note)
 
         # ---------- generation ----------
