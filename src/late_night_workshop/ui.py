@@ -5,6 +5,9 @@ The UI owns clicks, highlights and dialogs; `workshops` owns path/selection trut
 """
 
 import json
+import os
+import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -23,6 +26,26 @@ MOVE_MIME = "application/x-late-night-pal-move"  # browser rows; internal only (
 COPY_MIME = "application/x-late-night-pal-downloads"  # Recent downloads rows
 DROP_MIME = {"move": MOVE_MIME, "copy": COPY_MIME}
 BIN_ICON = "assets/recent-downloads-bin.svg"
+
+
+def find_chrome() -> str | None:
+    """chrome.exe from the usual per-machine/per-user install folders or PATH, else None."""
+    for base in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"):
+        root = os.environ.get(base)
+        if root:
+            exe = Path(root) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            if exe.is_file():
+                return str(exe)
+    return shutil.which("chrome") or shutil.which("chrome.exe")
+
+
+def open_pdf(path) -> bool:
+    """Opens a PDF in Chrome's viewer. False when Chrome isn't installed (the caller falls back)."""
+    chrome = find_chrome()
+    if not chrome:
+        return False
+    subprocess.Popen([chrome, Path(path).resolve().as_uri()], close_fds=True)
+    return True
 
 
 def describe_download(record: dict) -> str:
@@ -511,7 +534,7 @@ def run_app() -> int:
             self.dropped = None  # (effect, paths, folder) recorded by a drop target during drag.exec
             self.pending_drop = None
             self.row_filter = RowDragFilter(self.start_browser_drag, lambda p: self.later(self.open_row, p))
-            self.last_dir_click = None  # folder toggled by the first click of a double-click
+            self.last_dir_click = None  # row toggled by the first click of a double-click
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -683,7 +706,7 @@ def run_app() -> int:
             self.drop_zone.target = lambda: str(self.state["current"]) if self.state else None
             self.drop_zone.check, self.drop_zone.dropped = self.drop_allowed, self.record_drop
             left.addWidget(self.drop_zone)
-            hint = QLabel("Click a file or folder (or tick its box) to select it; double-click a folder to open it. "
+            hint = QLabel("Click a file or folder (or tick its box) to select it; double-click a folder to open it or a PDF to view it in Chrome. "
                           "Ctrl+click toggles without opening, "
                           "Shift+click adds a range. Drag rows onto a folder or Up to move them; drag "
                           "Recent downloads onto a folder to copy them.")
@@ -971,7 +994,9 @@ def run_app() -> int:
                 name.setToolTip(e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
-                name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"] else f"Select {e['name']}")
+                name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"]
+                                       else f"Select {e['name']}; double-click to open in Chrome"
+                                       if e["path"].suffix.lower() == ".pdf" else f"Select {e['name']}")
                 name.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                      self.later(self.row_clicked, p, d, False, QApplication.keyboardModifiers()))
                 for w in (row, name):  # drag starts here; the checkbox stays a plain checkbox
@@ -1041,17 +1066,21 @@ def run_app() -> int:
 
         def row_clicked(self, path, is_dir, from_box, mods):
             """Click (box or name, file or folder) toggles; Ctrl+click too; Shift+click adds anchor..row.
-            Opening a folder is a double-click (open_row)."""
+            Opening a folder or PDF is a double-click (open_row)."""
             if mods & Qt.ShiftModifier and self.anchor is not None:
                 workshops.select_range(self.state, self.row_paths, self.anchor, path)
                 return self.refresh()
             self.anchor = path
-            self.last_dir_click = path if is_dir and not from_box else None
+            self.last_dir_click = path if not from_box else None
             self.toggle(path)
 
         def open_row(self, path):
-            """Double-click: open a folder, undoing the toggle its first click made."""
-            if not path or not Path(path).is_dir():
+            """Double-click: open a folder in the browser or a PDF in Chrome, undoing the toggle its first click made."""
+            if not path:
+                return
+            p = Path(path)
+            is_pdf = p.is_file() and p.suffix.lower() == ".pdf"
+            if not (p.is_dir() or is_pdf):
                 return
             if self.last_dir_click == path:
                 try:
@@ -1059,7 +1088,21 @@ def run_app() -> int:
                 except workshops.WorkshopError:
                     pass
             self.last_dir_click = None
+            if is_pdf:
+                return self.view_pdf(path)
             self.open_folder(path)
+
+        def view_pdf(self, path):
+            self.refresh()  # shows the undone toggle
+            try:
+                if open_pdf(path):
+                    self.status.setText(f"Opened {Path(path).name} in Chrome.")
+                elif QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+                    self.status.setText(f"Chrome was not found; opened {Path(path).name} in the default PDF viewer.")
+                else:
+                    self.status.setText(f"Error: {Path(path).name} could not be opened (Chrome was not found).")
+            except OSError as e:
+                self.status.setText(f"Error: Chrome could not open {Path(path).name} ({type(e).__name__}).")
 
         def toggle(self, path):
             try:
