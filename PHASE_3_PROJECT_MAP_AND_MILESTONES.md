@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search) is implemented** (see Implementation notes); P3-M2 through P3-M6 are proposed and pending implementation.
+Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search) and P3-M2 (PDF page selection) are implemented** (see Implementation notes); P3-M3 through P3-M6 are proposed and pending implementation.
 
 1. Search across the workshop.
 2. Choose PDF pages for generation.
@@ -82,8 +82,8 @@ Use plain values and functions for search, page parsing, record validation and p
 
 | Milestone | Depends on | Deliverable | Done when |
 | --- | --- | --- | --- |
-| P3-M1 — Workshop search (**implemented**, Qt UI interaction not yet exercised) | Existing workshop browser | Name search, relative-path results, selection and open/location actions | Search a disposable workshop with duplicate filenames in different subfolders. Select a result and open a PDF. Clear search and confirm the selection and captured destination behavior. A stale query cannot replace newer results. Links outside the workshop are skipped. |
-| P3-M2 — PDF page selection end to end | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
+| P3-M1 — Workshop search (**implemented**) | Existing workshop browser | Name search, relative-path results, selection and open/location actions | Search a disposable workshop with duplicate filenames in different subfolders. Select a result and open a PDF. Clear search and confirm the selection and captured destination behavior. A stale query cannot replace newer results. Links outside the workshop are skipped. |
+| P3-M2 — PDF page selection end to end (**implemented**; the compile-dependent pipeline tests were blocked by MiKTeX) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
 | P3-M3 — Persistent generation history | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
 | P3-M4 — Reuse history and reconcile paths | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
 | P3-M5 — Persistent study progress | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
@@ -104,12 +104,53 @@ Use the repository's cheapest meaningful check at each milestone. Reuse existing
 
 ## Implementation notes
 
-Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M2 through P3-M6 are pending.
+Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M3 through P3-M6 are pending.
 
 ### P3-M1 — Workshop search (implemented 2026-11-09)
 
 - **Built:** `search.py` · `search(root, query, cancelled)` (Qt-free) and, in `ui.py`, the search field above the browser, debounce (250 ms), `SearchWorker` threads, `search_is_current()` stale-result rule, relative-path result rows with **Show in folder**, and the Refresh/organizer rerun. Details in `architecture.md` (Workshop and Desktop UI tables) and `workflow.md` section 2.
 - **Decisions:** links and junctions are skipped, not followed, in line with the browser and selection rules: they can't be selected, an in-workshop target is found at its real path, and an outside target is never reached. Navigation from results (folder double-click, Up, Show in folder) is explicit navigation, so it clears the search and changes Save to. Results are capped at 500 with a warning. Name-tag drops are refused while results are shown, because tags belong to the folder on screen.
 - **Verified (Python 3.12, Windows 10, no Qt):** `python -m unittest tests.test_search -v`, 6 tests passing, on a disposable workshop with `Lectures/Topic.pdf`, `Readings/topic.pdf` and `Readings/Deep/TOPIC notes.txt`. `toPIC` returns all three plus the `Topics` folder, in stable relative-path order. `.hidden/` and `.topic-draft.pdf` are skipped, a junction to an outside folder is skipped, and an in-workshop junction is not followed twice. Selecting a result keeps the current folder and the `build_request` destination, and the selection survives the redraw. `search_is_current` rejects an older seq, a changed query, another workshop and no workshop, and a cancelled search reports `cancelled`. A rescan sees an added and a deleted file. An unreadable folder produces the incomplete-results warning. That warning was also observed with a real `icacls /deny` (RD) on a disposable folder: `Results may be incomplete: 1 folder could not be read (Locked).` The existing `test_selection`, `test_drag_drop`, `test_organizing` and `test_name_tags` suites still pass.
-- **Not verified (environment):** none of the interpreters on this PC has PySide6, and there is no `.venv`. The Qt interaction (typing in the field, clicking and double-clicking result rows, opening a PDF from a result, Show in folder, clearing the box) was therefore not exercised. `ui.py` compiles. The PDF opening that results reuse (`open_pdf`) was checked with the Chrome launch stubbed.
+- **Qt interaction, verified later during P3-M2:** this ran in a throwaway Python 3.12 venv with PySide6 6.12.0 and pypdf 7.0.0, offscreen, with the Chrome launch stubbed, on a disposable workshop holding `Lectures/topic.pdf`, `Readings/topic.pdf` and a hidden copy. It covered:
+  - typing `TOPIC` (debounced) lists the two relative paths in order, without the hidden copy;
+  - two quick searches end on the newer query;
+  - clicking a result selects it, and Save to stays `Labs`;
+  - double-clicking a PDF result opens it in Chrome without changing the selection;
+  - clearing the box returns to `Labs` with the selection kept;
+  - **Show in folder** navigates to `Lectures` and ends the search;
+  - Refresh during a search shows a file that was added and drops one that was deleted.
+
+  The script was a one-off check and is not in the repository.
 - **Limitations:** names only (no document content). The walk is not cached, so each query rescans the workshop. A cancelled walk stops at the next folder boundary.
+
+### P3-M2 — PDF page selection end to end (implemented 2026-11-09)
+
+- **Built:** `pdf_pages.py` (Qt-free parsing, validation, inspection, subset writing, prompt mapping text). `workshops` keeps `state["pages"]` with `set_pages`; deselect and Refresh drop a PDF's setting, and `reconcile` remaps it after a move. `ui.build_request` adds `page_selections` (a snapshot), and `make_me_status` blocks bad pages and unreadable PDFs. The Pages field and note are on each selected PDF row, with page counts worked out on a `CallWorker` thread. `generation.generate` keeps one `lnp_inputs_*` temp folder for the whole job. `inputs.prepare_inputs` inspects every PDF, writes subsets in original mode, and in Efficient mode filters the cached full-file units. In `gemini_client`, the source fingerprint is checked, then the subset's bytes are checked against their own fingerprint, sent and counted toward the size cap. The mapping goes into the source index (`tasks.assemble_prompt`) and into each source label. Details are in `architecture.md`.
+- **Decisions:** a choice naming every page is treated as All pages, so no subset is made. Every PDF, including All pages originals, is now inspected with pypdf before sending, so encrypted or unreadable PDFs fail before any API call. Unparseable text is passed through to generation, which rejects it by filename (the UI already keeps Generate off for it). Page settings exist only for selected PDFs. Derived PDFs are not cached.
+- **Verified:** this ran in the same venv. `python -m unittest tests.test_pdf_pages -v` passes all 14 tests. The client stub calls the real `gemini_client._source_items`, so the checks below are on the bytes and text that would actually be sent:
+  - **Original mode, pages `1, 3-4` of a 5-page PDF:** the document has three pages, whose text is PAGE-1, PAGE-3 and PAGE-4. `page_map` is `[1, 3, 4]`, and the label includes `1→1, 2→3, 3→4`. The prompt's source index says `only original pages 1, 3-4 of 5`. The source fingerprint matches the original file and differs from the payload's.
+  - **Original pages 3 and 8:** in original mode the payload's pages are 3 and 8, and the label includes `1→3, 2→8`. In Efficient mode the markers are `[… - page 3]` and `[… - page 8]`.
+  - **Efficient mode:** the units are `[1, 3, 4]` and no page-2 text is sent. A TXT file in the same request still goes through. A second selection, `[2, 5]`, is served from the conversion cache (`hit`) with the right units.
+  - **Scans:** with a scan on page 2, choosing `1, 3-4` asks nothing. Choosing `1-2` asks about page 2, and **Process original** then sends a 2-page subset. Cancel returns `cancelled` with zero client calls, and the temp folder is gone.
+  - **Bad input:** `9`, `4-2` and `[0, 1]` fail with `invalid_pages` naming `Lectures/notes.pdf`, with zero calls. An encrypted PDF fails with `pdf_encrypted`, with zero calls.
+  - **Changes before sending:** editing the source gives `source_changed`, and tampering with the subset gives `payload_changed`. The temp folder is removed both times.
+  - **Legacy request:** a request without `page_selections` sends the original bytes unchanged.
+  - **Settings:** a captured request is not affected by later edits. Browsing and search leave settings alone, a folder move remaps them, deselecting drops them, and a state without `pages` still works.
+- **Offscreen Qt check, same run as the P3-M1 interaction above:**
+  - a PDF selected from search shows `All 5 pages`;
+  - `3-4, 1, 4` shows `Pages 1, 3-4 (3 of 5)`;
+  - `2-9` on a 3-page PDF shows the out-of-range message in red, and Generate turns off;
+  - an empty field shows `All 3 pages`, and Generate turns back on;
+  - after clearing search, the selection and Pages text are kept;
+  - `build_request` captures `{…/Lectures/topic.pdf: [1, 3, 4]}` with destination `Labs`;
+  - Refresh drops a deleted PDF's setting.
+
+  18/18 checks passed. The script was a one-off check and is not in the repository.
+- **Other tests:** the existing `test_search`, `test_selection`, `test_drag_drop`, `test_organizing`, `test_name_tags`, `test_executor`, `test_super_wrap` and `test_downloads` suites pass.
+- **Blocked (environment):**
+  - **LaTeX compile tests:** three `tests.test_latex_pipeline` tests that compile with lualatex fail on this PC, and so does the sandbox test, which calls `compile_document` directly and doesn't involve any P3-M2 code. MiKTeX tries to rebuild `lualatex.fmt` from inside the restricted compiler process, and Windows refuses (`CreateProcess`, error 1816, "Not enough quota"). The non-compiling pipeline tests pass. Rebuilding the format once outside the app (`miktex formats build lualatex --engine luahbtex`) should unblock them; this was not done here.
+  - **Real Gemini run:** no real Gemini request was made.
+- **Limitations:**
+  - A Pages field is committed with Enter or Tab (on focus loss), not while typing.
+  - Page counts are cached per file modification time for the session.
+  - The UI recounts PDFs it has not seen. On this PC the first `import pypdf` on a worker thread is held up when the GIL isn't released. The real app's `exec()` loop releases it, and the offscreen check passed once the harness did the same.

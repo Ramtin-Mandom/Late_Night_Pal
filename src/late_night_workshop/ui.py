@@ -12,7 +12,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import downloads, generation, inputs, name_tags, organizing, resource_path, search, tasks, workshops
+from . import downloads, generation, inputs, name_tags, organizing, pdf_pages, resource_path, search, tasks, workshops
 
 from .theme import COLORS
 
@@ -119,14 +119,77 @@ def build_request(state: dict, task_id: str = "summary", parameters: dict | None
         "task_id": task_id,
         "parameters": dict(parameters or {}),
         "efficient": bool(efficient),
+        "page_selections": page_selections(state),
     }
 
 
-def make_me_status(state: dict) -> dict:
+def page_selections(state: dict) -> dict:
+    """{pdf path: [pages]} for selected PDFs with a Pages setting (new lists: a snapshot). Text that
+    doesn't parse is passed as is, so generation rejects it with its filename before any API call."""
+    out = {}
+    for p in workshops.selected_sorted(state):
+        spec = state.get("pages", {}).get(p)
+        if spec:
+            try:
+                out[str(p)] = pdf_pages.parse_spec(spec, p.name)
+            except pdf_pages.PageError:
+                out[str(p)] = spec
+    return out
+
+
+def count_pages(paths) -> dict:
+    """{path: {"mtime", "count"} | {"mtime", "error"}}; runs on a worker thread, never raises."""
+    out = {}
+    for p in map(Path, paths):
+        mtime = None
+        try:
+            mtime = p.stat().st_mtime
+            out[p] = {"mtime": mtime, "count": pdf_pages.inspect(p)}
+        except pdf_pages.PageError as e:
+            out[p] = {"mtime": mtime, "error": e.message}
+        except Exception as e:
+            out[p] = {"mtime": mtime, "error": f"{p.name} could not be read ({type(e).__name__})."}
+    return out
+
+
+def page_problem(state: dict, path, info: dict | None = None) -> str | None:
+    """Why a selected PDF's Pages setting (or the PDF itself) can't be used, else None.
+    info is count_pages()'s entry; without it only the syntax is checked."""
+    rel = workshops.relative(state, path)
+    if info and info.get("error"):
+        return info["error"]
+    try:
+        pages = pdf_pages.parse_spec(state.get("pages", {}).get(Path(path)), rel)
+        if pages and info and info.get("count"):
+            pdf_pages.validate(pages, info["count"], rel)
+    except pdf_pages.PageError as e:
+        return e.message
+    return None
+
+
+def describe_pages(state: dict, path, info: dict | None = None) -> str:
+    """Pages note under a selected PDF: count and the normalized selection, or the problem."""
+    problem = page_problem(state, path, info)
+    if problem:
+        return problem
+    pages = pdf_pages.parse_spec(state.get("pages", {}).get(Path(path)), Path(path).name)
+    count = (info or {}).get("count")
+    if count and pages and len(pages) == count:
+        pages = None
+    return pdf_pages.describe(pages, count) + ("" if info else " (counting pages...)")
+
+
+def make_me_status(state: dict, page_info: dict | None = None) -> dict:
     """Generate eligibility from the shared selection: {ok, blockers: {path: reason}, message}.
-    Feedback only; generate() still runs workshops.validate_paths() at the boundary."""
+    Feedback only; generate() still runs workshops.validate_paths() at the boundary.
+    page_info ({path: count_pages() entry}) adds Pages problems and unreadable PDFs."""
     selected = workshops.selected_sorted(state)
     blockers = inputs.generation_blockers(selected)
+    for p in selected:
+        if p not in blockers and p.suffix.lower() == ".pdf":
+            problem = page_problem(state, p, (page_info or {}).get(p))
+            if problem:
+                blockers[p] = problem
     if not selected:
         return {"ok": False, "blockers": {}, "message": "Select at least one file to Generate."}
     if blockers:
@@ -572,6 +635,10 @@ def run_app() -> int:
             self.search_seq = 0  # newest search request; older results are dropped
             self.search_jobs = {}  # seq -> (QThread, SearchWorker), kept alive until each finishes
             self.search_result = None  # accepted result being shown; None = folder view
+            self.page_info = {}  # selected PDF -> count_pages() entry (page count or error)
+            self.pages_thread = None
+            self.pages_worker = None
+            self.page_notes = {}  # path -> (QLineEdit, QLabel) of the visible Selected Inputs rows
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -836,7 +903,7 @@ def run_app() -> int:
             self.selected_lbl.setWordWrap(True)
             right.addWidget(self.selected_lbl)
             self.selected_list = QListWidget()
-            self.selected_list.setFixedHeight(120)
+            self.selected_list.setFixedHeight(168)
             right.addWidget(self.selected_list)
             modes = QHBoxLayout()
             self.mode_group = QButtonGroup(page)
@@ -1088,8 +1155,9 @@ def run_app() -> int:
         def refresh_selected(self):
             """Selected Inputs from the one workshop selection; Generate eligibility from make_me_status()."""
             selected = workshops.selected_sorted(self.state)
-            status = make_me_status(self.state)
+            status = make_me_status(self.state, self.page_info)
             self.selected_list.clear()
+            self.page_notes = {}
             folders = 0
             for p in selected:
                 rel = workshops.relative(self.state, p)
@@ -1100,9 +1168,12 @@ def run_app() -> int:
                 item.setData(PATH_ROLE, str(p))
                 item.setData(Qt.AccessibleTextRole, f"Selected {kind}{rel}")
                 row = QWidget()
-                hl = QHBoxLayout(row)
-                hl.setContentsMargins(8, 4, 8, 4)
+                vl = QVBoxLayout(row)
+                vl.setContentsMargins(8, 4, 8, 4)
+                vl.setSpacing(2)
+                hl = QHBoxLayout()
                 hl.setSpacing(8)
+                vl.addLayout(hl)
                 lbl = PathLabel(kind + rel)
                 lbl.setTextFormat(Qt.PlainText)
                 lbl.setToolTip(str(p))
@@ -1116,6 +1187,21 @@ def run_app() -> int:
                 remove.setToolTip("Deselect only; the file or folder is not deleted.")
                 remove.clicked.connect(lambda _=False, q=str(p): self.later(self.remove_selected, q))
                 hl.addWidget(lbl, 1)
+                if exists and p.suffix.lower() == ".pdf":
+                    pages = QLineEdit(self.state.get("pages", {}).get(p, ""))
+                    pages.setPlaceholderText("All pages")
+                    pages.setFixedWidth(104)
+                    pages.setAccessibleName(f"Pages of {rel}")
+                    pages.setToolTip("Pages to use, e.g. 1, 3-5, 8 (empty = All pages). Numbers are the PDF's "
+                                     "physical pages, starting at 1.")
+                    pages.editingFinished.connect(lambda q=p, w=pages: self.later(self.pages_edited, q, w.text()))
+                    hl.addWidget(pages)
+                    note = QLabel(describe_pages(self.state, p, self.page_info.get(p)))
+                    note.setWordWrap(True)
+                    note.setProperty("role", "support")
+                    vl.addWidget(note)
+                    self.page_notes[p] = (pages, note)
+                    self.style_page_note(p)
                 hl.addWidget(remove)
                 item.setSizeHint(row.sizeHint())
                 self.selected_list.addItem(item)
@@ -1132,6 +1218,58 @@ def run_app() -> int:
             self.update_bin_buttons()
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
+            self.count_selected_pages()
+
+        # ---------- PDF pages (P3-M2): page counts off the UI thread; text lives in state["pages"] ----------
+        def style_page_note(self, path):
+            _, note = self.page_notes[path]
+            bad = page_problem(self.state, path, self.page_info.get(path)) is not None
+            note.setStyleSheet(f"color: {COLORS['error']};" if bad else "")
+
+        def pages_edited(self, path, text):
+            if self.state is None or path not in self.state["selected"]:
+                return
+            if (self.state.get("pages", {}).get(path) or "") == text.strip():
+                return
+            workshops.set_pages(self.state, path, text)
+            self.refresh_selected()
+
+        def count_selected_pages(self):
+            """Count pages of selected PDFs that are new or changed on disk; one worker at a time."""
+            if self.pages_thread is not None or self.state is None:
+                return
+            todo = []
+            for p in self.state["selected"]:
+                if p.suffix.lower() != ".pdf" or not p.is_file():
+                    continue
+                known = self.page_info.get(p)
+                try:
+                    if known is None or known.get("mtime") != p.stat().st_mtime:
+                        todo.append(p)
+                except OSError:
+                    continue
+            if not todo:
+                return
+            self.pages_thread = QThread()
+            self.pages_worker = CallWorker(lambda paths=tuple(todo): count_pages(paths))
+            self.pages_worker.moveToThread(self.pages_thread)
+            self.pages_thread.started.connect(self.pages_worker.run)
+            self.pages_worker.finished.connect(self.pages_counted)
+            self.pages_thread.start()
+
+        def pages_counted(self, result):
+            self.pages_thread.quit()
+            self.pages_thread.wait()
+            self.pages_thread = None
+            if "records" in result:  # CallWorker's last-resort fallback
+                return
+            self.page_info.update(result)
+            if any(edit.hasFocus() for edit, _ in self.page_notes.values()):
+                for p, (_, note) in self.page_notes.items():  # never rebuild under the cursor
+                    note.setText(describe_pages(self.state, p, self.page_info.get(p)))
+                    self.style_page_note(p)
+            else:
+                self.refresh_selected()
 
         def row_clicked(self, path, is_dir, from_box, mods):
             """Click (box or name, file or folder) toggles; Ctrl+click too; Shift+click adds anchor..row.
@@ -1260,6 +1398,9 @@ def run_app() -> int:
             self.status.setText(f"Showing {p.name} in {workshops.relative(self.state, p.parent)}.")
 
         def closeEvent(self, event):
+            if self.pages_thread is not None:
+                self.pages_thread.quit()
+                self.pages_thread.wait()
             self.cancel_search()
             for thread, _ in list(self.search_jobs.values()):
                 thread.quit()
@@ -1586,7 +1727,7 @@ def run_app() -> int:
 
         # ---------- generation ----------
         def generate(self):
-            if self.thread is not None or self.org_thread is not None or not make_me_status(self.state)["ok"]:
+            if self.thread is not None or self.org_thread is not None or not make_me_status(self.state, self.page_info)["ok"]:
                 return  # duplicate click while running, or the selection has entries Make me can't use
             request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
                                     self.efficient_box.isChecked())

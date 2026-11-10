@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import AppError
+from . import AppError, pdf_pages
 
 DEFAULT_MODEL = "gemini-3.8-flash"  # verified available to this project on 2026-11-07
 MAX_PDF_BYTES = 50 * 1024 * 1024    # documented PDF limit (50 MB / 1000 pages)
@@ -64,7 +64,7 @@ def _sanitize(exc: Exception) -> GeminiError:
 
 def text_source_item(i: int, s: dict) -> str:
     """Locally extracted text, attributed by source ID and page/slide number."""
-    parts = [f"Source {i}: {s['source_id']} (text extracted locally from {s['filename']})"]
+    parts = [f"Source {i}: {s['source_id']} (text extracted locally from {s['filename']}){pdf_pages.mapping_note(s)}"]
     for u in s["text_parts"]:
         if u["unit"] in ("page", "slide"):
             parts.append(f"[{s['source_id']} - {u['unit']} {u['number']}]")
@@ -88,10 +88,18 @@ def _source_items(sources: list[dict]) -> list[dict]:
         if "sha256:" + hashlib.sha256(data).hexdigest() != s["fingerprint"]:
             raise GeminiError("source_changed", f"{s['source_id']} changed after it was selected. Generate again.",
                               source_id=s["source_id"])
+        if s.get("payload_path"):  # selected-page subset: send it, verified against its own bytes
+            try:
+                data = Path(s["payload_path"]).read_bytes()
+            except OSError:
+                data = b""
+            if "sha256:" + hashlib.sha256(data).hexdigest() != s["payload_fingerprint"]:
+                raise GeminiError("payload_changed", f"The page subset prepared for {s['source_id']} is missing or "
+                                  "changed. Generate again.", source_id=s["source_id"])
         total += len(data)
         if total > MAX_PDF_BYTES:
             raise GeminiError("input_too_large", "Selected PDFs exceed 50 MB together. Select fewer files.")
-        items.append({"type": "text", "text": f"Source {i}: {s['source_id']}"})
+        items.append({"type": "text", "text": f"Source {i}: {s['source_id']}{pdf_pages.mapping_note(s)}"})
         items.append({"type": "document", "mime_type": s["mime_type"], "data": base64.b64encode(data).decode("ascii")})
     return items
 

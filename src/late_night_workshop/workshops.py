@@ -1,7 +1,8 @@
 """Workshop folders: open/create, browse, selection across navigation, recents, containment.
 
 A workshop is a real folder. State is a plain dict:
-    {"root": Path, "current": Path, "selected": set[Path]}   # canonical absolute paths
+    {"root": Path, "current": Path, "selected": set[Path],   # canonical absolute paths
+     "pages": {Path: str}}   # P3-M2: Pages text per selected PDF; absent = All pages
 Recents live in local app data under the internal id (not the display name),
 so renaming the app never loses them.
 """
@@ -58,7 +59,7 @@ def open_workshop(path) -> dict:
     if not root.is_dir():
         raise WorkshopError("missing_workshop", f"Workshop folder not found: {root}")
     add_recent(root)
-    return {"root": root, "current": root, "selected": set()}
+    return {"root": root, "current": root, "selected": set(), "pages": {}}
 
 
 def create_workshop(path) -> dict:
@@ -125,6 +126,7 @@ def toggle_selection(state: dict, path) -> bool:
         raise WorkshopError("missing_entry", f"{p.name} no longer exists. Click Refresh.")
     if p in state["selected"]:
         state["selected"].discard(p)
+        state.setdefault("pages", {}).pop(p, None)  # deselecting a PDF drops its page setting
         return False
     state["selected"].add(p)
     return True
@@ -157,6 +159,7 @@ def deselect(state: dict, path) -> bool:
     hits = [p for p in state["selected"] if os.path.normcase(str(p)) == key]
     for p in hits:
         state["selected"].discard(p)
+        state.setdefault("pages", {}).pop(p, None)
     return bool(hits)
 
 
@@ -167,6 +170,7 @@ def prune(state: dict) -> list[Path]:
     gone = [p for p in selected_sorted(state) if not os.path.lexists(p)]
     for p in gone:
         state["selected"].discard(p)
+        state.setdefault("pages", {}).pop(p, None)
     current = state["current"]
     while current != state["root"] and not current.is_dir():
         current = current.parent
@@ -203,10 +207,26 @@ def reconcile(state: dict, outcomes) -> None:
     unattempted and copied_source_kept entries (their sources still exist). The current folder
     follows a move, or falls back to its nearest surviving folder."""
     state["selected"] = set(remap_paths(state["selected"], outcomes))
+    pages = {}
+    for path, spec in state.get("pages", {}).items():  # settings follow their PDF (also inside moved folders)
+        moved = remap_paths([path], outcomes)
+        if moved and moved[0] in state["selected"]:
+            pages[moved[0]] = spec
+    state["pages"] = pages
     current = (remap_paths([state["current"]], outcomes) or [state["current"]])[0]
     while current != state["root"] and not current.is_dir():
         current = current.parent
     state["current"] = current
+
+
+def set_pages(state: dict, path, text: str) -> None:
+    """Store the Pages text of a selected PDF; empty text means All pages (the setting is removed)."""
+    p = Path(path)
+    pages = state.setdefault("pages", {})
+    if p not in state["selected"] or p.suffix.lower() != ".pdf" or not (text or "").strip():
+        pages.pop(p, None)
+    else:
+        pages[p] = text.strip()
 
 
 def selected_sorted(state: dict) -> list[Path]:

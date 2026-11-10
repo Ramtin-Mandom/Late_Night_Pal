@@ -12,6 +12,14 @@ Routing
                     formats: no text) -> a needs_original decision if the original is supported,
                     else unsupported_input with an export suggestion. Never sent silently.
 original_overrides holds source IDs the student approved for "Process original" in this job.
+
+PDF page choices (P3-M2): page_selections maps a selected PDF's canonical path to None (All pages)
+or a list of original page numbers. Each PDF is inspected first (encrypted/unreadable PDFs fail
+here, before any API call) and the choice is checked against its page count. Original mode then
+sends a subset PDF written into payload_dir (the generation job's temp folder): the record keeps
+the source's own fingerprint/original_path for change checks and adds payload_path,
+payload_fingerprint, payload_size and page_map. Text mode filters the (cached, full-file) units
+to the chosen pages, keeping their original numbers; the low-text test sees only those pages.
 """
 
 import hashlib
@@ -19,7 +27,7 @@ import mimetypes
 import os
 from pathlib import Path
 
-from . import AppError, converters
+from . import AppError, converters, pdf_pages
 from .workshops import relative
 
 MIME = {
@@ -72,12 +80,13 @@ def _export_hint(ext: str) -> str:
 
 
 def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=None,
-                   original_overrides=frozenset()) -> dict:
+                   original_overrides=frozenset(), page_selections=None, payload_dir=None) -> dict:
     if not selected_paths:
         raise InputError("no_inputs", "Select at least one file first.")
     originals_ok = set((capabilities or {}).get("original_mime_types") or [MIME[".pdf"]])
     sources, decisions, warnings = [], [], []
-    for path in selected_paths:
+    choices = {Path(k): v for k, v in (page_selections or {}).items()}
+    for index, path in enumerate(selected_paths, 1):
         path = Path(path)
         ext = path.suffix.lower()
         source_id = relative(root, path)
@@ -85,11 +94,26 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
         data = path.read_bytes()
         record = {"source_id": source_id, "filename": path.name, "relative_path": source_id, "mime_type": mime,
                   "fingerprint": "sha256:" + hashlib.sha256(data).hexdigest(), "size": len(data),
-                  "mode": "original", "text_parts": [], "original_path": None, "cache": None}
+                  "mode": "original", "text_parts": [], "original_path": None, "cache": None,
+                  "pages": None, "page_count": None}
         can_original = mime in originals_ok and ext not in PASS_THROUGH
+        if ext == ".pdf":
+            try:
+                record["page_count"] = pdf_pages.inspect(path, data)
+                record["pages"] = pdf_pages.validate(choices.get(path), record["page_count"], source_id)
+            except pdf_pages.PageError as e:
+                raise InputError(e.code, e.message if e.message.startswith(source_id) else
+                                 e.message.replace(path.name, source_id, 1), source_id=source_id)
+        pages = record["pages"]
 
         def as_original():
             record.update(mode="original", original_path=str(path))
+            if pages:
+                if payload_dir is None:
+                    raise InputError("no_payload_dir", "Internal error: no job folder for the page subset.")
+                sub = pdf_pages.write_subset(path, pages, Path(payload_dir) / f"source-{index:03d}-pages.pdf", data)
+                record.update(payload_path=sub["path"], payload_fingerprint=sub["fingerprint"],
+                              payload_size=sub["size"], page_map=sub["page_map"])
             sources.append(record)
 
         if source_id in original_overrides and can_original:
@@ -105,18 +129,22 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
             conv = converters.convert(path, data)
         except converters.ConversionError as e:
             raise InputError(e.code, f"{source_id}: {e.message}", source_id=source_id)
-        low = _low_text_units(ext, conv["units"])
+        units = conv["units"]
+        if pages:
+            wanted = set(pages)
+            units = [u for u in units if u["unit"] == "page" and u["number"] in wanted]  # cache stays full-file
+        low = _low_text_units(ext, units)
         if low:
             if can_original:
                 decisions.append({"source_id": source_id, "filename": path.name, "code": "needs_original",
                                   "reason": "little_text", "units": [u for u in low if u is not None],
-                                  "unit_kind": conv["units"][0]["unit"] if conv["units"] else "page",
+                                  "unit_kind": units[0]["unit"] if units else "page", "pages": pages,
                                   "choices": ["process_original", "cancel"]})
                 sources.append(record)  # placeholder; not sent while decisions are unresolved
                 continue
             raise InputError("unsupported_input", f"{source_id}: no usable text could be extracted, and Gemini "
                              f"can't take this file type as an original. {_export_hint(ext)}", source_id=source_id)
-        record.update(mode="text", text_parts=conv["units"], cache=conv["cache"])
+        record.update(mode="text", text_parts=units, cache=conv["cache"])
         if not efficient and ext not in PASS_THROUGH:
             warnings.append({"code": "converted_locally", "source_id": source_id,
                              "message": f"{source_id} was converted to text locally (Gemini doesn't accept "

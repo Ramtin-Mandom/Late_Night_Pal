@@ -1,6 +1,6 @@
 # Application workflow
 
-The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search) is implemented; PDF page selection, generation history and study progress are pending.
+The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search) and P3-M2 (PDF page selection) are implemented; generation history and study progress are pending.
 
 Current state: M7. The same flow runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
@@ -18,6 +18,8 @@ Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (p
 2. **Up**, the `Readings` folder, `topic.pdf` → Selected Inputs lists both relative paths.
 3. The selection survives navigation, mode and task changes. Ticking a folder's checkbox selects the folder without opening it. Any file type can be selected (types Make me can't use are greyed). **Remove** deselects an entry from any view, even one deleted on disk; it never deletes the file. **Ctrl+click** a row toggles it (a folder too, without opening it); **Shift+click** adds every row from the last clicked one to this one. A plain click never clears other selections.
 4. **Up**, the `Revision` folder: this is the destination captured at Generate.
+
+**Pages (P3-M2).** Each selected PDF in **Selected Inputs** (picked in the browser or from search) has a **Pages** field showing `All pages`, with a note such as `All 5 pages`. Type `3-4, 1, 4` and press Enter or Tab → `Pages 1, 3-4 (3 of 5)`. Numbers are the PDF's physical pages from 1. `9`, `4-2`, `0` or `x` make the note red with the file's name and turn Generate off; clearing the field means All pages again. The setting stays across navigation and search, follows the PDF through an Organize move, and is dropped when the PDF is deselected. Generate captures it. Efficient off sends a temporary PDF with only those pages, labelled with the mapping to the original page numbers. Efficient on sends only those pages' text, with markers such as `[Lectures/topic.pdf - page 3]`. Only the chosen pages count for the scan check, and **Process original** sends the same subset. The temporary PDF is deleted when the job ends, however it ends.
 
 **Make me eligibility.** If the selection holds a folder, an unsupported type, an unreadable file or a missing entry, it is shown in red, the note above Generate names it and why, and Generate stays off. Remove those entries: other selections, task, Days, Folder name, style and Efficient are unchanged. Generation still rechecks files-only at its boundary.
 

@@ -3,7 +3,10 @@
     generate(request, on_progress, deps, decide_inputs) -> {"status": "ok", "output_root", "paths", "warnings", "timings"}
                                     | {"status": "error", "error": envelope} | {"status": "cancelled"}
 
-request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient"}
+request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient",
+           "page_selections"?: {pdf path: None | [original page numbers]}}   (missing = All pages)
+Selected-page PDF subsets live in one job temp folder from preparation through the last retry and
+are deleted on success, failure and cancellation.
 Components are passed in through `deps` so each boundary can be swapped for a stub.
 Recovery is bounded and every extra Gemini request is announced in progress:
   - transient network failure: one automatic retry of the same request
@@ -19,6 +22,7 @@ rendering happens in a temp dir and publishing is all-or-nothing.
 import tempfile
 import time
 from datetime import date
+from pathlib import Path
 
 from . import AppError, gemini_client, inputs, outputs, rendering, tasks, validation, workshops
 
@@ -62,9 +66,28 @@ def _subtitle(sources: list[dict]) -> str:
     return f"From {names} · {date.today():%Y-%m-%d}"
 
 
+def page_choices(request: dict, paths) -> dict:
+    """{canonical path: choice} for the selected paths only; a missing field means All pages."""
+    wanted = {Path(p) for p in paths}
+    out = {}
+    for k, v in (request.get("page_selections") or {}).items():
+        try:
+            key = Path(k).resolve()
+        except OSError:
+            continue
+        if key in wanted:
+            out[key] = list(v) if isinstance(v, (list, tuple)) else v
+    return out
+
+
 def generate(request: dict, on_progress=lambda event: None, deps: dict | None = None,
              decide_inputs=None) -> dict:
     """decide_inputs(decisions) -> {source_id: "process_original" | "cancel"}; missing means cancel."""
+    with tempfile.TemporaryDirectory(prefix="lnp_inputs_", ignore_cleanup_errors=True) as payload_dir:
+        return _generate(request, on_progress, deps, decide_inputs, payload_dir)
+
+
+def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
     d = {**DEFAULT_DEPS, **(deps or {})}
     timings = {}
 
@@ -142,7 +165,9 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
         efficient = bool(request.get("efficient", False))
         if efficient:
             progress("preparing", "Converting files to text locally...")
-        prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps)
+        selections = page_choices(request, checked["paths"])
+        prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps,
+                                     page_selections=selections, payload_dir=payload_dir)
         if prep["decisions"]:
             # Scan / no-text files: the student must choose before anything is sent.
             progress("awaiting_input", "Waiting for your choice about " +
@@ -152,7 +177,8 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
             if any(choices.get(sid) != "process_original" for sid in pending):
                 return {"status": "cancelled", "timings": timings}
             prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps,
-                                         original_overrides=frozenset(pending))
+                                         original_overrides=frozenset(pending), page_selections=selections,
+                                         payload_dir=payload_dir)
             if prep["decisions"]:
                 raise RequestError("needs_original", "Some files still need a decision.")
         sources = prep["sources"]
