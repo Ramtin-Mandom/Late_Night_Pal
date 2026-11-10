@@ -1049,14 +1049,14 @@ def run_app() -> int:
             self.selected_list = QListWidget()
             self.selected_list.setFixedHeight(168)
             right.addWidget(self.selected_list)
-            modes = QHBoxLayout()
+            modes = QGridLayout()  # 2 x 2: four labels don't fit one row of the narrow right panel
             self.mode_group = QButtonGroup(page)
             self.mode_stack = QStackedWidget()
             for i, label in enumerate(("Organize", "Make me", "History", "Progress")):
                 b = decorate(QPushButton(label), ("organize", "make-me", "schedule", "checklist")[i])
                 b.setCheckable(True)
                 self.mode_group.addButton(b, i)
-                modes.addWidget(b)
+                modes.addWidget(b, i // 2, i % 2)
             right.addLayout(modes)
             right.addWidget(self.mode_stack)
             org_page = QWidget()
@@ -1244,8 +1244,11 @@ def run_app() -> int:
                 self.load_progress()
 
         def mode_changed(self, index):
-            """Switch Organize / Make me / History; selection and every Make me setting are untouched."""
+            """Switch Organize / Make me / History / Progress; selection and every Make me setting are untouched.
+            History and Progress don't use Selected Inputs or Save to, so those are hidden to give their lists room."""
             self.mode_stack.setCurrentIndex(index)
+            for w in (self.selected_lbl, self.selected_list, self.save_lbl):
+                w.setVisible(index in (0, 1))
             self.refresh_selected()
             if index == 2:
                 self.load_history()
@@ -1275,6 +1278,7 @@ def run_app() -> int:
             self.prog_total.setProperty("role", "heading")
             lay.addWidget(self.prog_total)
             self.prog_list = QListWidget()
+            self.prog_list.setMinimumHeight(200)  # two days of three items stay visible
             self.prog_list.setAccessibleName("Study items by day; tick when done")
             self.prog_list.itemChanged.connect(self.progress_toggled)
             self.prog_list.itemDoubleClicked.connect(lambda *_: self.open_progress_document())
@@ -1446,12 +1450,14 @@ def run_app() -> int:
             self.history_note.setProperty("role", "support")
             lay.addWidget(self.history_note)
             self.history_list = QListWidget()
+            self.history_list.setMinimumHeight(120)
             self.history_list.setAccessibleName("Generation history, newest first")
             self.history_list.setWordWrap(True)
             self.history_list.currentRowChanged.connect(self.show_history_record)
             lay.addWidget(self.history_list, 2)
             lay.addWidget(heading("Outputs"))
             self.history_outputs = QListWidget()
+            self.history_outputs.setMinimumHeight(110)
             self.history_outputs.setAccessibleName("Outputs of the chosen generation")
             self.history_outputs.currentRowChanged.connect(lambda *_: self.update_history_buttons())
             self.history_outputs.itemDoubleClicked.connect(lambda *_: self.open_history_document())
@@ -1806,7 +1812,9 @@ def run_app() -> int:
                 item.setData(PATH_ROLE, path)
                 item.setData(PATH_ROLE + 1, "dir" if e["is_dir"] else "file")
                 # Row widgets are invisible to screen readers/UI Automation; name the item itself.
-                item.setData(Qt.AccessibleTextRole, ("Folder " if e["is_dir"] else "File ") + e["name"]
+                # Search results use the relative path, so same-name files stay distinguishable.
+                shown = e["relative"] if searching else e["name"]
+                item.setData(Qt.AccessibleTextRole, ("Folder " if e["is_dir"] else "File ") + shown
                              + (", selected" if e["selected"] else ""))
                 row = QWidget()
                 hl = QHBoxLayout(row)
@@ -1814,7 +1822,7 @@ def run_app() -> int:
                 hl.setSpacing(8)
                 box = QCheckBox()
                 box.setChecked(e["selected"])
-                box.setAccessibleName(f"Select {e['name']}")
+                box.setAccessibleName(f"Select {shown}")
                 box.setToolTip("Select or deselect")
                 box.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                     self.later(self.row_clicked, p, d, True, QApplication.keyboardModifiers()))
@@ -1826,9 +1834,9 @@ def run_app() -> int:
                 name.setToolTip(e["relative"] if searching else e["name"])
                 name.setFlat(True)
                 name.setStyleSheet("text-align: left;")
-                name.setAccessibleName(f"Select folder {e['name']}; double-click to open" if e["is_dir"]
-                                       else f"Select {e['name']}; double-click to open in Chrome"
-                                       if e["path"].suffix.lower() == ".pdf" else f"Select {e['name']}")
+                name.setAccessibleName(f"Select folder {shown}; double-click to open" if e["is_dir"]
+                                       else f"Select {shown}; double-click to open in Chrome"
+                                       if e["path"].suffix.lower() == ".pdf" else f"Select {shown}")
                 name.clicked.connect(lambda _=False, p=path, d=e["is_dir"]:
                                      self.later(self.row_clicked, p, d, False, QApplication.keyboardModifiers()))
                 for w in (row, name):  # drag starts here; the checkbox stays a plain checkbox

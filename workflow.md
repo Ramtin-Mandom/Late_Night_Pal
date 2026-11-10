@@ -1,8 +1,8 @@
 # Application workflow
 
-The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search), P3-M2 (PDF page selection), P3-M3 (generation history), P3-M4 (Reuse settings, History after organizer moves) and P3-M5 (study progress) are implemented; P3-M6 (packaged integrated demo) is pending.
+The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search), P3-M2 (PDF page selection), P3-M3 (generation history), P3-M4 (Reuse settings, History after organizer moves) and P3-M5 (study progress) are implemented, and P3-M6 verified them together in the packaged Windows build with real Gemini and LaTeX on 2026-11-09. Phase 3 is complete.
 
-Current state: M7. The same flow runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
+Current state: Phase 3 complete (P3-M6). The same flow, plus search, PDF pages, History, Reuse settings and Progress, runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
 Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
 

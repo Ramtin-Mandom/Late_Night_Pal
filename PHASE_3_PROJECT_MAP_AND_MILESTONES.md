@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection), P3-M3 (persistent generation history), P3-M4 (reuse history and reconcile paths) and P3-M5 (persistent study progress) are implemented** (see Implementation notes); P3-M6 (integrated packaged demo and handoff) is pending.
+Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection), P3-M3 (persistent generation history), P3-M4 (reuse history and reconcile paths) and P3-M5 (persistent study progress) are implemented, and P3-M6 verified them together in the packaged Windows build with real Gemini and LaTeX on 2026-11-09. Phase 3 is complete** (see Implementation notes).
 
 1. Search across the workshop.
 2. Choose PDF pages for generation.
@@ -83,11 +83,11 @@ Use plain values and functions for search, page parsing, record validation and p
 | Milestone | Depends on | Deliverable | Done when |
 | --- | --- | --- | --- |
 | P3-M1 — Workshop search (**implemented**) | Existing workshop browser | Name search, relative-path results, selection and open/location actions | Search a disposable workshop with duplicate filenames in different subfolders. Select a result and open a PDF. Clear search and confirm the selection and captured destination behavior. A stale query cannot replace newer results. Links outside the workshop are skipped. |
-| P3-M2 — PDF page selection end to end (**implemented**; the compile-dependent pipeline tests were blocked by MiKTeX) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
-| P3-M3 — Persistent generation history (**implemented**; verified with stubbed Gemini/LaTeX, no real generation) | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
-| P3-M4 — Reuse history and reconcile paths (**implemented**; verified with stubbed Gemini/LaTeX) | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
-| P3-M5 — Persistent study progress (**implemented**; verified with stubbed Gemini/LaTeX) | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
-| P3-M6 — Integrated demo and handoff | P3-M1 through P3-M5 | Working packaged flow and current implementation documentation | Run the walkthrough below in the Windows build. Verify search and page helpers are included, PDF opening works, history/progress survive restart, and one existing All pages generation still succeeds. Update affected sections of architecture, workflow and README with observed behavior. |
+| P3-M2 — PDF page selection end to end (**implemented**; real Gemini/LaTeX run verified in P3-M6) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
+| P3-M3 — Persistent generation history (**implemented**; real run verified in P3-M6) | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
+| P3-M4 — Reuse history and reconcile paths (**implemented**; real run verified in P3-M6) | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
+| P3-M5 — Persistent study progress (**implemented**; real run verified in P3-M6) | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
+| P3-M6 — Integrated demo and handoff (**complete**, 2026-11-09) | P3-M1 through P3-M5 | Working packaged flow and current implementation documentation | Run the walkthrough below in the Windows build. Verify search and page helpers are included, PDF opening works, history/progress survive restart, and one existing All pages generation still succeeds. Update affected sections of architecture, workflow and README with observed behavior. |
 
 ## Verification and demo
 
@@ -104,7 +104,7 @@ Use the repository's cheapest meaningful check at each milestone. Reuse existing
 
 ## Implementation notes
 
-Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M6 is pending.
+Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. All Phase 3 milestones are complete. The MiKTeX blocker noted under P3-M2, P3-M4 and P3-M5 was resolved in P3-M6.
 
 ### P3-M1 — Workshop search (implemented 2026-11-09)
 
@@ -290,3 +290,52 @@ Add verified outcomes, relevant checks and remaining limitations as each milesto
   - Progress has no reset or clear-all button.
   - Deleting a plan from History isn't possible, so its progress stays.
   - Completion is a manual marker only, as specified.
+
+### P3-M6 — Integrated demo and handoff (complete 2026-11-09)
+
+- **LaTeX blocker, diagnosed and fixed:**
+  - **Cause:** MiKTeX 25.12 (user install) had no `lualatex.fmt`. lualatex tries to build the format itself (`miktex formats build lualatex --engine luahbtex`, as its log shows). Inside the app's restricted job, where `ActiveProcessLimit` is 1, that child process is refused with Windows error 1816 "Not enough quota". This is intended isolation.
+  - **Fix:** the same command was run once from a normal terminal. MiKTeX's package-install prompt appeared, and the user approved it in MiKTeX's dialog. The format was installed at `%LOCALAPPDATA%\MiKTeX\miktex\data\le\luahbtex\lualatex.fmt`.
+  - **After the fix:** the first rerun of `tests.test_latex_pipeline` passed the sandbox test but failed two generation tests on `chemgreek.sty not found`. MiKTeX was still refreshing its file database at that moment; `chemgreek` was installed and `kpsewhich` found it. A minimal mhchem/siunitx compile through `rendering.compile_document` (the restricted path) then worked in 2.7 s, and all six LaTeX pipeline tests passed, including the sandbox test (no file or key read). The compiler isolation was not changed.
+- **Environment:** Windows 10 Home 22H2 (10.0.19045). Build venv `.venv` with Python 3.12.10 (3.11 isn't installed; the project requires ≥ 3.11), created with `pip install -e ".[build]"`: PySide6 6.12.0, pypdf 7.0.0, google-genai 3.0.0, PyInstaller 6.22.3. MiKTeX 25.12. Model `gemini-3.8-flash`. The key came from a git-ignored `.env` the user filled in.
+- **Tests:** full suite `python -m unittest discover -s tests` → 97 tests OK. It ran once before the integration fixes and once after them (19–25 s). After each fix, the focused offscreen UI checks were rerun and still passed: search + Pages 18/18, History 11/11, Reuse + reconcile 16/16, Progress 14/14. These are one-off scripts, not in the repository.
+- **Integration fixes found by the packaged walkthrough:**
+  - **Search result accessibility:** search result rows were named only by basename, so two same-name files were indistinguishable to screen readers and UI Automation. Their accessible names now use the relative path.
+  - **Mode button labels:** four mode buttons in one row clipped their labels (`Organi`, `Histor` …) at the default 1200 × 780 window. They now sit in a 2 × 2 grid.
+  - **Cramped lists:** the Progress checklist was squeezed to about one row, and History's outputs list was cramped. History and Progress now hide Selected Inputs and Save to (unused there), and their lists have minimum heights. The offscreen layout check at 1200 × 780 showed all six items.
+  - **Build script:** `packaging/build_release.py` now also refuses History/progress folders, `organizer.json`, `*.tmp` and `*.unreadable-*` files, and `READ ME FIRST.txt` describes the Phase 3 tools.
+- **Release:**
+  - **Built:** `.venv\Scripts\python packaging\build_release.py` (about 1½ min) produced `dist\LateNightPal-win64.zip`, 74.0 MB (77.6 MB as reported by the script), 375 files (448 ZIP entries including folders), longest path 116 characters. The executable is `dist\Late Night Pal\Late Night Pal.exe`.
+  - **Key check:** the build was rerun after the key was added, so its key-leak scan ran with the real key, and it passed.
+  - **Clean archive:** the ZIP contains no `.env`, log, recents, History, progress, conversion-cache or recovery files (checked by listing its entries).
+  - **Spec:** the PyInstaller spec already collects every `late_night_workshop` submodule (`search`, `pdf_pages`, `history`, `study_progress`) and the `assets` folder with all UI icons; no spec change was needed.
+- **Packaged walkthrough setup:** the ZIP was extracted to `%TEMP%\LNP P3M6 Packaged Test\` (a path with spaces). The exe was launched from `C:\Windows` with `LOCALAPPDATA` set to `%TEMP%\LNP P3M6 AppData\`. MiKTeX reads its roots from its own configuration, so compiling still worked; this was checked first. The disposable workshop `%TEMP%\LNP P3M6 Workshop\` held `Lectures/Week 1/stats-notes.pdf` (the repo's 35-page `Sample_pdf/Note_1.pdf`) and `Readings/stats-notes.pdf` (the 81-page `Note_2.pdf`).
+- **`--check`:** every prompt, template and asset was `ok`, with `svg icons: ok`, lualatex found and `frozen build: True`. It reported `gemini key: … not set`, because the key was deliberately placed next to the exe only for the walkthrough and removed afterwards.
+- **Walkthrough in the real packaged UI:** driven through Windows UI Automation, plus real mouse clicks wherever Qt row widgets aren't exposed (recent row, Pages field, progress checkboxes, combo popups). Every click first checked that Late Night Pal was the window under the pointer. Steps d, i and k used real Gemini + lualatex.
+  - **a. Open the workshop:** opened from Recents.
+  - **b. Search:** `STATS-notes` gave `Search: 2 matches`, with the rows `File Lectures/Week 1/stats-notes.pdf` and `File Readings/stats-notes.pdf`. Double-clicking the first reported `Opened stats-notes.pdf in Chrome.` and left the selection as it was; a single click then selected it.
+  - **c. Pages:** in the packaged UI, the Pages field showed `Pages 1, 3-4 (3 of 35)` (screenshot). The payload itself was inspected on the same workshop with the dev runtime and a stub client calling the real `_source_items`:
+    - Original mode sent a 3-page attachment whose text is original pages 1, 3 and 4, labelled `only original pages 1, 3-4 of 35; … 1→1, 2→3, 3→4` in both the label and the source index.
+    - Efficient mode sent only the `page 1/3/4` markers.
+    - In the real output, Day 1 notes cite "original page 3".
+  - **d. Real two-day daily plan** (Efficient off, Save to `Revision`): `Saved 6 PDFs in …\Revision\Daily Study Plan` and `Added to History.` in 55 s total. Gemini took about 37 s, and each of the six compiles about 3 s. This one run was on the build just before the layout fixes, which change no generation code; steps e–k used the final build.
+  - **e. History:** the entry read `Inputs: Lectures/Week 1/stats-notes.pdf (pages 1, 3-4)`, `Standard style · 2 days · Efficient off · Save to: Revision`, `Outputs: 6 PDFs in Revision/Daily Study Plan`. The stored record (id `7b3c4b1a…`) has `pages [1, 3, 4]`, `page_count 35`, the original file's sha256, and six outputs `day-01-notes` … `day-02-checklist` with role, day and final path, all available.
+  - **f. Open document:** History's own button reported `Opened notes.pdf in Chrome.`
+  - **g. Progress:** two real checkbox clicks gave `2/6 items complete`, `Day 1 · 1/3`, `Day 2 · 1/3`.
+  - **h. Restart:** after a normal close (the process exited, none left) and a relaunch, History showed the same entry and Progress showed `2/6` with the same two ticks.
+  - **i. Reuse settings:** the Reuse panel read "Everything checks out". It restored the selection, `1, 3-4`, Study plan / Make daily study plan / 2 days / `Daily Study Plan` / Efficient off and `Save to: Revision`, read back through UI Automation. Generate then saved `Revision\Daily Study Plan (2)` in 46 s (about 30 s Gemini). The new generation `afdddbf4…` showed `0/6`, while the first plan kept `2/6`.
+  - **j. Organize move:** Organize → Wrap into `Week 9 archive` moved the first plan to `Revision/Week 9 archive/Daily Study Plan`. History then read `6 PDFs in Revision/Week 9 archive/Daily Study Plan`. Its Open document opened the moved `notes.pdf`; the old path no longer exists, and a stale path would have shown "unavailable". Open output folder opened Explorer on `…/Week 9 archive/Daily Study Plan`. Progress listed the moved paths, still `2/6`, and its Open document opened the moved `sample-questions.pdf`.
+  - **k. All pages run:** Single file → Summary of `Readings/stats-notes.pdf` with All pages saved `Revision\summary.pdf` in 85 s (about 79 s Gemini, then one compile). It was recorded with `pages None` of 81.
+  - **Metadata location:** History and progress files were written only under the disposable app-data folder: `history\2f4c9e6682b0cd318efc.json` and `progress\…`.
+- **Generated PDFs inspected:** rendered with Windows' built-in PDF renderer: Day 1 notes (2 pages), Day 2 sample questions (1 page) and the Summary (4 pages). All were readable, with correct titles and subtitles, math typeset, no clipping or missing content, and labelled answers. One cosmetic nit: two closing quotes around "treatment" in Gemini's text.
+- **Recovery behavior:** checked with existing tests and injected failures:
+  - invalid pages are rejected before any client call (`test_invalid_ranges_fail_before_the_client`);
+  - after a History save failure, the saved PDFs are still reported and a metadata-only retry saves one record (`test_history` and the History check);
+  - a progress save failure restores the checkbox and totals;
+  - missing outputs show as unavailable;
+  - obsolete responses after a plan or workshop switch are ignored (Progress and search checks).
+- **Limitations:**
+  - On a new PC, MiKTeX's format and the packages in `latex-packages.txt` must be ready before the first compile. The restricted compiler can't build or install them itself (the README now says so).
+  - Qt's per-row widgets (Selected Inputs' Pages field, browser row checkboxes) and checkable progress items aren't operable through UI Automation's patterns, so assistive tools need mouse or keyboard focus there.
+  - During the session, two stray clicks landed in the Claude window and one keystroke sequence (`1, 3-4`, Tab) went to another window while the app was minimized, before the foreground checks were added. The user was told.
+- **Not verified:** a second PC; the packaged app on a display scale other than this PC's; History/progress across a workshop folder rename outside the app (by design these show as unavailable).

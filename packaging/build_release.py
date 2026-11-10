@@ -52,11 +52,18 @@ Demo
      (built from the scan; note the 0.8 M sucrose -> -14% result). That example predates the
      answer-label fix, so its Answers sections are unlabelled; fresh runs label them Q1, Q2, ...
   Quick single-file demo: Single file -> Summary on Lectures\\photosynthesis-lecture.pdf.
+
+Study tools
+  - Search (above the file list) finds file and folder names anywhere in the workshop.
+  - Pages (under Selected Inputs) limits a PDF to pages such as 1, 3-4.
+  - History lists earlier results; Reuse settings restores one for another Generate.
+  - Progress tracks each daily plan's Notes / Sample questions / Checklist per day.
+  History and progress are kept on this PC in %LOCALAPPDATA%\\late_night_workshop (not in this folder).
 """
 
-FORBIDDEN_NAMES = {".env", "recents.json"}
-FORBIDDEN_SUFFIXES = {".log"}
-FORBIDDEN_DIRS = {"conversions", "logs", "__pycache__"}
+FORBIDDEN_NAMES = {".env", "recents.json", "organizer.json"}
+FORBIDDEN_SUFFIXES = {".log", ".tmp"}
+FORBIDDEN_DIRS = {"conversions", "logs", "__pycache__", "history", "progress"}  # local app data, never shipped
 
 
 def developer_key() -> bytes:
@@ -80,7 +87,7 @@ def main() -> int:
     problems = []
     for path in STAGE.rglob("*"):
         rel = path.relative_to(STAGE.parent).as_posix()
-        if path.name in FORBIDDEN_NAMES or path.suffix in FORBIDDEN_SUFFIXES or \
+        if path.name in FORBIDDEN_NAMES or path.suffix in FORBIDDEN_SUFFIXES or ".unreadable-" in path.name or \
                 (path.is_dir() and path.name in FORBIDDEN_DIRS and "Demo" in rel):
             problems.append(rel)
         elif key and path.is_file() and key in path.read_bytes():
