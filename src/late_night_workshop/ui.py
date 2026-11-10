@@ -12,8 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from . import (downloads, generation, history, inputs, name_tags, organizing, pdf_pages, resource_path, search, tasks,
-               workshops)
+from . import (downloads, generation, history, inputs, name_tags, organizing, pdf_pages, resource_path, search,
+               study_progress, tasks, workshops)
 
 from .theme import COLORS
 
@@ -777,7 +777,12 @@ def run_app() -> int:
             self.reuse = None  # checked History entry being restored (P3-M4)
             self.reuse_seq = 0
             self.call_seq = 0
-            self.call_jobs = {}  # job -> (QThread, CallWorker) for reuse checks
+            self.call_jobs = {}  # job -> (QThread, CallWorker) for reuse checks and study progress
+            self.prog_seq = 0  # newest Study progress load; older ones are dropped
+            self.prog_plans = []  # daily-plan History records of the open workshop
+            self.prog_done = {}  # generation_id -> {document_id: bool} as last persisted
+            self.prog_pending = set()  # (generation_id, document_id) being saved: disabled until answered
+            self.prog_building = False
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -1047,8 +1052,8 @@ def run_app() -> int:
             modes = QHBoxLayout()
             self.mode_group = QButtonGroup(page)
             self.mode_stack = QStackedWidget()
-            for i, label in enumerate(("Organize", "Make me", "History")):
-                b = decorate(QPushButton(label), ("organize", "make-me", "schedule")[i])
+            for i, label in enumerate(("Organize", "Make me", "History", "Progress")):
+                b = decorate(QPushButton(label), ("organize", "make-me", "schedule", "checklist")[i])
                 b.setCheckable(True)
                 self.mode_group.addButton(b, i)
                 modes.addWidget(b)
@@ -1157,6 +1162,7 @@ def run_app() -> int:
             self.mode_stack.addWidget(org_page)
             self.mode_stack.addWidget(form_scroll)
             self.mode_stack.addWidget(self._history_page())
+            self.mode_stack.addWidget(self._progress_page())
             right_outer.addWidget(self.save_lbl)
             right_outer.addWidget(self.generate_btn)
             right_outer.addLayout(row)
@@ -1226,6 +1232,7 @@ def run_app() -> int:
             self.clear_history_view()  # entries of the previous workshop must not show here
             self.reuse = None
             self.reuse_seq += 1  # a reuse check still running belongs to the previous workshop
+            self.clear_progress_view()
             self.root_lbl.setText(f"{state['root'].name}   ·   {state['root']}")
             self.load_tags()
             self.refresh()
@@ -1233,6 +1240,8 @@ def run_app() -> int:
             self.stack.setCurrentIndex(1)
             if self.mode_stack.currentIndex() == 2:
                 self.load_history()
+            if self.mode_stack.currentIndex() == 3:
+                self.load_progress()
 
         def mode_changed(self, index):
             """Switch Organize / Make me / History; selection and every Make me setting are untouched."""
@@ -1240,6 +1249,186 @@ def run_app() -> int:
             self.refresh_selected()
             if index == 2:
                 self.load_history()
+            if index == 3:
+                self.load_progress()
+
+        # ---------- Study progress (P3-M5): per (generation_id, document_id), saved one checkbox at a time ----------
+        def _progress_page(self):
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            top = QHBoxLayout()
+            top.addWidget(heading("Study progress · daily plans"), 1)
+            reload_btn = decorate(QPushButton("Reload"), "refresh")
+            reload_btn.clicked.connect(self.load_progress)
+            top.addWidget(reload_btn)
+            lay.addLayout(top)
+            self.prog_note = QLabel("")
+            self.prog_note.setWordWrap(True)
+            self.prog_note.setProperty("role", "support")
+            lay.addWidget(self.prog_note)
+            self.prog_plan = QComboBox()
+            self.prog_plan.setAccessibleName("Daily plan")
+            self.prog_plan.currentIndexChanged.connect(lambda *_: self.show_plan())
+            lay.addWidget(self.prog_plan)
+            self.prog_total = QLabel("")
+            self.prog_total.setProperty("role", "heading")
+            lay.addWidget(self.prog_total)
+            self.prog_list = QListWidget()
+            self.prog_list.setAccessibleName("Study items by day; tick when done")
+            self.prog_list.itemChanged.connect(self.progress_toggled)
+            self.prog_list.itemDoubleClicked.connect(lambda *_: self.open_progress_document())
+            self.prog_list.currentRowChanged.connect(lambda *_: self.update_progress_buttons())
+            lay.addWidget(self.prog_list, 1)
+            self.prog_open_btn = decorate(QPushButton("Open document"), "notes")
+            self.prog_open_btn.setToolTip("Open this PDF. Opening never changes its checkbox.")
+            self.prog_open_btn.clicked.connect(self.open_progress_document)
+            lay.addWidget(self.prog_open_btn)
+            self.update_progress_buttons()
+            return page
+
+        def clear_progress_view(self):
+            self.prog_seq += 1  # a load still running belongs to the previous workshop
+            self.prog_plans, self.prog_done, self.prog_base_note = [], {}, ""
+            self.prog_plan.blockSignals(True)
+            self.prog_plan.clear()
+            self.prog_plan.blockSignals(False)
+            self.prog_list.clear()
+            self.prog_total.setText("")
+            self.prog_note.setText("")
+            self.update_progress_buttons()
+
+        def load_progress(self):
+            if self.state is None:
+                return
+            self.prog_seq += 1
+            seq, root = self.prog_seq, self.state["root"]
+            self.prog_note.setText("Loading study progress...")
+            self.run_call("progress_loaded", lambda: dict(study_progress.view(root), seq=seq))
+
+        def on_progress_loaded(self, v):
+            if self.state is None or v.get("seq") != self.prog_seq or v.get("root") != str(self.state["root"]):
+                return  # an older load or another workshop: never shown
+            if "error" in v:
+                self.prog_note.setText("Study progress could not be loaded. " + v["error"])
+                return
+            keep = self.current_plan()
+            keep_id = keep["generation_id"] if keep else None
+            saved = self.prog_done
+            self.prog_plans = v["plans"]
+            self.prog_done = {gid: dict(m) for gid, m in v["done"].items()}
+            for gid, doc in self.prog_pending:  # a save still on its way answers for these items
+                if doc in saved.get(gid, {}):
+                    self.prog_done.setdefault(gid, {})[doc] = saved[gid][doc]
+            self.prog_plan.blockSignals(True)
+            self.prog_plan.clear()
+            for r in self.prog_plans:
+                self.prog_plan.addItem(study_progress.describe_plan(r), r["generation_id"])
+            ids = [r["generation_id"] for r in self.prog_plans]
+            self.prog_plan.setCurrentIndex(ids.index(keep_id) if keep_id in ids else 0)
+            self.prog_plan.blockSignals(False)
+            notes = list(v["warnings"])
+            if not self.prog_plans:
+                notes.append("No daily study plans in this workshop's History yet. Make a daily study plan to track it here.")
+            self.prog_base_note = "\n".join(notes)
+            self.prog_note.setText(self.prog_base_note)
+            self.prog_note.setStyleSheet(f"color: {COLORS['error']};" if v["warnings"] else "")
+            self.show_plan()
+
+        def current_plan(self):
+            i = self.prog_plan.currentIndex()
+            return self.prog_plans[i] if 0 <= i < len(self.prog_plans) else None
+
+        def show_plan(self):
+            """Rebuild the checklist of the chosen plan from its manifest and the persisted state."""
+            row = self.prog_list.currentRow()
+            self.prog_building = True
+            self.prog_list.clear()
+            r = self.current_plan()
+            if r is None:
+                self.prog_total.setText("")
+                self.prog_building = False
+                return self.update_progress_buttons()
+            plan = study_progress.manifest(r)
+            done = self.prog_done.get(r["generation_id"], {})
+            t = study_progress.totals(plan, done)
+            self.prog_total.setText(f"{t['done']}/{t['total']} items complete")
+            for d in plan["days"]:
+                n, total = t["days"][d["day"]]
+                head = QListWidgetItem(f"Day {d['day']} · {n}/{total}")
+                head.setFlags(Qt.ItemIsEnabled)
+                head.setForeground(QBrush(QColor(COLORS["secondary"])))
+                self.prog_list.addItem(head)
+                for i in d["items"]:
+                    gone = i["status"] != "available"
+                    item = QListWidgetItem(f"    {i['label']}  ·  {i['path']}" + ("  (unavailable: moved or deleted)" if gone else ""))
+                    item.setData(PATH_ROLE, [r["generation_id"], i["document_id"], i["path"]])
+                    pending = (r["generation_id"], i["document_id"]) in self.prog_pending
+                    item.setFlags((Qt.ItemIsSelectable | Qt.ItemIsUserCheckable) | (Qt.NoItemFlags if pending else Qt.ItemIsEnabled))
+                    item.setCheckState(Qt.Checked if done.get(i["document_id"]) else Qt.Unchecked)
+                    if gone:
+                        item.setForeground(QBrush(QColor(COLORS["muted"])))
+                    self.prog_list.addItem(item)
+            self.prog_note.setText("\n".join(filter(None, [getattr(self, "prog_base_note", "")] + plan["warnings"])))
+            self.prog_list.setCurrentRow(min(max(row, 0), self.prog_list.count() - 1))
+            self.prog_building = False
+            self.update_progress_buttons()
+
+        def update_progress_buttons(self):
+            item = self.prog_list.currentItem() if hasattr(self, "prog_list") else None
+            data = item.data(PATH_ROLE) if item else None
+            self.prog_open_btn.setEnabled(bool(data) and "unavailable" not in item.text())
+
+        def progress_toggled(self, item):
+            if self.prog_building or self.state is None:
+                return
+            data = item.data(PATH_ROLE)
+            if not data:
+                return
+            gid, doc = data[0], data[1]
+            if (gid, doc) in self.prog_pending:
+                return self.show_plan()  # one save per item at a time
+            want = item.checkState() == Qt.Checked
+            self.prog_pending.add((gid, doc))
+            self.prog_building = True
+            item.setFlags(item.flags() & ~Qt.ItemIsEnabled)  # disabled until this save answers
+            self.prog_building = False
+            root = self.state["root"]
+
+            def save():
+                try:
+                    return dict(study_progress.set_done(root, gid, doc, want), ok=True, root=str(root))
+                except study_progress.ProgressError as e:
+                    return {"ok": False, "message": e.message, "root": str(root), "generation_id": gid, "document_id": doc}
+            self.run_call("progress_saved", save)
+
+        def on_progress_saved(self, r):
+            if "root" not in r:
+                return self.status.setText("Error: study progress could not be saved. " + r.get("error", ""))
+            self.prog_pending.discard((r["generation_id"], r["document_id"]))
+            if self.state is None or r["root"] != str(self.state["root"]):
+                return  # saved for its own workshop; nothing on screen belongs to it
+            if r["ok"]:
+                self.prog_done.setdefault(r["generation_id"], {})[r["document_id"]] = r["done"]
+                if r.get("moved_aside"):
+                    self.status.setText(f"The unreadable study progress file was kept as {r['moved_aside']}.")
+            else:
+                self.status.setText("Error: " + r["message"])  # the view shows the last saved value again
+            cur = self.current_plan()
+            if cur and cur["generation_id"] == r["generation_id"]:
+                self.show_plan()
+
+        def open_progress_document(self):
+            item = self.prog_list.currentItem()
+            data = item.data(PATH_ROLE) if item else None
+            if not data or self.state is None:
+                return
+            path, status = history.resolve(self.state["root"], data[2])
+            if status != "available" or not path.is_file():
+                self.status.setText(f"Error: {data[2]} is unavailable (moved, deleted or outside the workshop). "
+                                    "Its checkbox is kept.")
+                return self.load_progress()
+            self.view_pdf(str(path))  # opening never changes completion
 
         # ---------- History (P3-M3): load off the UI thread, open actions recheck containment ----------
         def _history_page(self):
@@ -2256,6 +2445,8 @@ def run_app() -> int:
             self.status.setText((describe_drop(result, drop) if drop else describe_outcomes(result)) + tag_note + hist_note)
             if moves and self.mode_stack.currentIndex() == 2:
                 self.load_history()
+            if moves and self.mode_stack.currentIndex() == 3:
+                self.load_progress()  # reconciled History paths, same ids and checkboxes
 
         # ---------- generation ----------
         def generate(self):
@@ -2322,6 +2513,8 @@ def run_app() -> int:
                 self.status.setText(describe_saved(result))
                 if self.mode_stack.currentIndex() == 2:
                     self.load_history()
+                if self.mode_stack.currentIndex() == 3:
+                    self.load_progress()
             else:
                 self.status.setText(describe_error(result["error"]))
             if self.state:

@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection), P3-M3 (persistent generation history) and P3-M4 (reuse history and reconcile paths) are implemented** (see Implementation notes); P3-M5 and P3-M6 are proposed and pending implementation.
+Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection), P3-M3 (persistent generation history), P3-M4 (reuse history and reconcile paths) and P3-M5 (persistent study progress) are implemented** (see Implementation notes); P3-M6 (integrated packaged demo and handoff) is pending.
 
 1. Search across the workshop.
 2. Choose PDF pages for generation.
@@ -86,7 +86,7 @@ Use plain values and functions for search, page parsing, record validation and p
 | P3-M2 — PDF page selection end to end (**implemented**; the compile-dependent pipeline tests were blocked by MiKTeX) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
 | P3-M3 — Persistent generation history (**implemented**; verified with stubbed Gemini/LaTeX, no real generation) | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
 | P3-M4 — Reuse history and reconcile paths (**implemented**; verified with stubbed Gemini/LaTeX) | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
-| P3-M5 — Persistent study progress | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
+| P3-M5 — Persistent study progress (**implemented**; verified with stubbed Gemini/LaTeX) | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
 | P3-M6 — Integrated demo and handoff | P3-M1 through P3-M5 | Working packaged flow and current implementation documentation | Run the walkthrough below in the Windows build. Verify search and page helpers are included, PDF opening works, history/progress survive restart, and one existing All pages generation still succeeds. Update affected sections of architecture, workflow and README with observed behavior. |
 
 ## Verification and demo
@@ -104,7 +104,7 @@ Use the repository's cheapest meaningful check at each milestone. Reuse existing
 
 ## Implementation notes
 
-Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M5 and P3-M6 are pending.
+Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M6 is pending.
 
 ### P3-M1 — Workshop search (implemented 2026-11-09)
 
@@ -246,3 +246,47 @@ Add verified outcomes, relevant checks and remaining limitations as each milesto
   - An unsaved retry record is kept only in memory, so it is lost if the app closes.
   - Moves made outside the app, for example in Explorer, are not followed; those entries show as unavailable.
   - Reuse restores one entry at a time and doesn't merge it with the current selection.
+
+### P3-M5 — Persistent study progress (implemented 2026-11-09)
+
+- **Built:**
+  - `study_progress.py` (Qt-free): `manifest`, `totals`, `daily_plans`, `describe_plan`, `load`, `set_done`, `view`.
+  - `ui.py`: a **Progress** mode. It has a plan chooser, per-day groups with checkboxes and `n/m` counts, the plan total, **Open document** and **Reload**. Loads and saves run through the existing `run_call` workers.
+- **Decisions:**
+  - Progress has its own versioned file per workshop, named like the History file but kept in a `progress` folder. Each module only ever writes its own file, so a progress save cannot overwrite History records or reconciled paths, and History reconciliation never touches progress.
+  - Items come only from the History record's outputs (`document_id`, role, day), so moves keep ticks without any progress rewrite.
+  - One save per item at a time: the item is disabled until its save answers. A response updates only its own item, so out-of-order answers can't overwrite newer ticks.
+  - Unavailable items stay checkable and counted.
+  - Plans are identified by output folder plus completion time. The folder carries the plan name and any ` (2)` suffix.
+- **Verified:** in the same throwaway venv (Python 3.12, PySide6 6.12.0, pypdf 7.0.0). Gemini and lualatex were stubbed; publication and organizer moves were real.
+  - **`python -m unittest tests.test_study_progress -v`, 11 tests passing:**
+    - two days × Notes / Sample questions / Checklist start at 0/6;
+    - two ticks give `2/6` with days `1/3` and `1/3`, also after a fresh load, and unticking one gives 1;
+    - a same-name plan (`Revision/Week 5 (2)`) starts at 0 while the first keeps its tick;
+    - a record from before progress existed loads with no file and no warning;
+    - a forced write failure raises "…shows the last saved value", and the file is byte-identical;
+    - 18 concurrent saves on six items leave all six saved;
+    - a real organizer move remaps every path to `Archive/Week 5/Day 0…`, all available, with the tick kept;
+    - a deleted checklist shows `missing` but still counts, `1/6`;
+    - a duplicate `document_id` and a non-plan output give two warnings, are counted once, and stray entries are ignored;
+    - a corrupt file is left as is with a warning naming it; the next save keeps it as `*.unreadable-*.json`;
+    - a progress save leaves the History file byte-identical, and History reconciliation leaves the progress file byte-identical;
+    - workshops are separate.
+  - **Other tests:** all 91 non-LaTeX tests pass.
+  - **Offscreen Qt check, 14/14:**
+    - the real Progress mode lists the two same-name plans newest first and leaves the Summary out;
+    - each plan shows `Day 1 · 0/3`, `Day 2 · 0/3` and six checkboxes;
+    - an item is disabled while its save runs; two ticks give `2/6`, `Day 1 · 1/3`, `Day 2 · 1/3`, and the other plan stays at 0/6;
+    - a reload (as after a restart) restores 2/6;
+    - a forced write failure puts the box back and keeps 2/6 with the error shown;
+    - with a 0.6 s delayed save, a second click on the pending item is refused, switching plans keeps the other plan at 0/6, and the result matches disk;
+    - switching to workshop B during a delayed save shows only B's plan at 0/6, while A's save still lands in A;
+    - a real `handle_drop` move of `Week 5` to `Archive` reloads with the new paths. Open document launches `Archive/Week 5/Day 01/notes.pdf`, with completion unchanged and zero Gemini calls;
+    - after deleting that PDF it shows as unavailable, still ticked and counted (`4/6`), and Open document is off.
+
+    The P3-M4 (16/16), P3-M3 (11/11) and P3-M1/M2 (18/18) checks still pass. These were one-off scripts and are not in the repository.
+- **Not verified (environment):** no real Gemini or lualatex generation ran. Three of the six `tests.test_latex_pipeline` tests still fail on the MiKTeX `lualatex.fmt` rebuild (error 1816 "Not enough quota"), as recorded under P3-M2 and P3-M4. The packaged exe was not rebuilt or run; that is P3-M6.
+- **Limitations:**
+  - Progress has no reset or clear-all button.
+  - Deleting a plan from History isn't possible, so its progress stays.
+  - Completion is a manual marker only, as specified.
