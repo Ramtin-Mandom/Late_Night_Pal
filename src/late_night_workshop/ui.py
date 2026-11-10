@@ -67,6 +67,64 @@ def record_history(workshop_root, result: dict) -> dict:
     return {"saved": True, "note": note}
 
 
+def reconcile_history(workshop_root, outcomes) -> dict:
+    """After an organizer run (worker thread): apply its confirmed moves to stored History.
+    {"needed": False} | {"needed", "ok": True, "changed", "warning"} |
+    {"needed", "ok": False, "message", "moves", "at"} (kept for a metadata-only retry)."""
+    moves = history.confirmed_moves(outcomes)
+    if not moves:
+        return {"needed": False}
+    at = history.now_stamp()
+    try:
+        r = history.reconcile(workshop_root, moves, before=at)
+    except history.HistoryError as e:
+        return {"needed": True, "ok": False, "message": e.message, "moves": moves, "at": at}
+    return {"needed": True, "ok": True, "changed": r["changed"], "warning": r["warning"]}
+
+
+def retry_metadata(reconciles: list, records: dict) -> dict:
+    """Metadata only (no Gemini call, no file operation): first the History path updates that
+    failed after organizer runs, then the records whose save failed, each in its own workshop."""
+    done_reconciles, still = [], []
+    for root, moves, at in reconciles:
+        try:
+            history.reconcile(root, moves, before=at)
+            done_reconciles.append(root)
+        except history.HistoryError as e:
+            still.append(e.message)
+    saved = {gid: record_history(root, {"history_record": rec}) for gid, (root, rec) in records.items()}
+    return {"reconciled": len(done_reconciles), "failed_reconciles": still, "records": saved}
+
+
+def apply_reuse(state: dict, check: dict) -> None:
+    """Restore a checked History entry into the workshop state: selection (missing entries too,
+    so nothing is dropped silently), Pages text, and the saved destination when it is available."""
+    entries = [e for e in check["inputs"] if e["path"] and not e.get("dropped") and e["status"] != "unsafe"]
+    state["selected"] = {Path(e["path"]) for e in entries}
+    state["pages"] = {Path(e["path"]): pdf_pages.format_pages(e["pages"]) for e in entries if e.get("pages")}
+    dest = check["destination"]
+    if not dest["problem"]:
+        state["current"] = Path(dest["path"])
+
+
+def reuse_blockers(reuse: dict | None, state: dict) -> dict:
+    """Problems of a restored History entry that need an explicit choice before Generate:
+    {key: message}. Missing/unusable inputs and page problems are left to make_me_status."""
+    if not reuse or not state or reuse["root"] != str(state["root"]):
+        return {}
+    out = {}
+    if reuse["task_problem"] and not reuse.get("task_resolved"):
+        out["task"] = reuse["task_problem"]
+    if reuse["destination"]["problem"] and not reuse["destination"].get("resolved"):
+        out["destination"] = reuse["destination"]["problem"]
+    for e in reuse["inputs"]:
+        if e["status"] == "unsafe" and not e.get("dropped"):
+            out["input:" + e["rel"]] = e["message"]
+        elif e["status"] == "changed" and not e.get("accepted") and e["path"] and Path(e["path"]) in state["selected"]:
+            out["input:" + e["rel"]] = e["message"]
+    return out
+
+
 def describe_saved(result: dict) -> str:
     """Status after a successful Generate: saved paths, then whether History was updated."""
     if len(result["paths"]) == 1:
@@ -238,7 +296,7 @@ def describe_pages(state: dict, path, info: dict | None = None) -> str:
     return pdf_pages.describe(pages, count) + ("" if info else " (counting pages...)")
 
 
-def make_me_status(state: dict, page_info: dict | None = None) -> dict:
+def make_me_status(state: dict, page_info: dict | None = None, reuse: dict | None = None) -> dict:
     """Generate eligibility from the shared selection: {ok, blockers: {path: reason}, message}.
     Feedback only; generate() still runs workshops.validate_paths() at the boundary.
     page_info ({path: count_pages() entry}) adds Pages problems and unreadable PDFs."""
@@ -249,6 +307,10 @@ def make_me_status(state: dict, page_info: dict | None = None) -> dict:
             problem = page_problem(state, p, (page_info or {}).get(p))
             if problem:
                 blockers[p] = problem
+    pending = reuse_blockers(reuse, state)
+    if selected and pending and not blockers:
+        return {"ok": False, "blockers": {}, "reuse": pending,
+                "message": "Generate is off until you resolve the reused settings: " + " ".join(pending.values())}
     if not selected:
         return {"ok": False, "blockers": {}, "message": "Select at least one file to Generate."}
     if blockers:
@@ -453,6 +515,11 @@ def run_app() -> int:
                 result = {"action": self.plan["action"], "status": "failed", "outcomes": [], "created": [],
                           "removed": [], "error": {"message": f"Unexpected error ({type(e).__name__}: {e})."}}
             result["root"] = self.plan["root"]
+            try:  # after the file operations, still off the UI thread
+                result["history"] = reconcile_history(self.plan["root"], result.get("outcomes"))
+            except Exception as e:
+                result["history"] = {"needed": True, "ok": False, "moves": history.confirmed_moves(result.get("outcomes")),
+                                     "at": history.now_stamp(), "message": f"Unexpected error ({type(e).__name__})."}
             self.finished.emit(result)
 
     HOT_STYLE = f"background: {COLORS['warning_bg']}; color: {COLORS['text']}; border: 2px solid {COLORS['amber']};"
@@ -706,6 +773,11 @@ def run_app() -> int:
             self.hist_thread = self.hist_worker = None
             self.hist_reload = False
             self.retry_thread = self.retry_worker = None
+            self.pending_reconcile = []  # [(workshop root, confirmed moves, at)] whose History update failed
+            self.reuse = None  # checked History entry being restored (P3-M4)
+            self.reuse_seq = 0
+            self.call_seq = 0
+            self.call_jobs = {}  # job -> (QThread, CallWorker) for reuse checks
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -1006,6 +1078,21 @@ def run_app() -> int:
             right_outer, right = right, QVBoxLayout(make_page)
             right.setContentsMargins(0, 0, 0, 0)
             right.setSpacing(8)
+            self.reuse_box = QWidget()
+            self.reuse_box.setProperty("panel", True)
+            reuse_lay = QVBoxLayout(self.reuse_box)
+            reuse_lay.setContentsMargins(8, 8, 8, 8)
+            self.reuse_title = QLabel("")
+            self.reuse_title.setWordWrap(True)
+            reuse_lay.addWidget(self.reuse_title)
+            self.reuse_rows = QVBoxLayout()
+            reuse_lay.addLayout(self.reuse_rows)
+            self.reuse_done_btn = QPushButton("Done")
+            self.reuse_done_btn.setToolTip("Hide this note; the restored settings stay.")
+            self.reuse_done_btn.clicked.connect(self.close_reuse)
+            reuse_lay.addWidget(self.reuse_done_btn)
+            self.reuse_box.setVisible(False)
+            right.addWidget(self.reuse_box)
             right.addWidget(QLabel("Output type"))
             self.output_type = QComboBox()
             self.output_type.addItems([tasks.STUDY_PLAN, tasks.SINGLE_FILE])
@@ -1137,6 +1224,8 @@ def run_app() -> int:
             self.status.setText("")
             self.clear_search_box()  # results and in-flight searches belong to the previous workshop
             self.clear_history_view()  # entries of the previous workshop must not show here
+            self.reuse = None
+            self.reuse_seq += 1  # a reuse check still running belongs to the previous workshop
             self.root_lbl.setText(f"{state['root'].name}   ·   {state['root']}")
             self.load_tags()
             self.refresh()
@@ -1186,6 +1275,11 @@ def run_app() -> int:
             row.addWidget(self.hist_doc_btn)
             row.addWidget(self.hist_folder_btn)
             lay.addLayout(row)
+            self.hist_reuse_btn = decorate(QPushButton("Reuse settings"), "make-me")
+            self.hist_reuse_btn.setToolTip("Restore this entry's inputs, pages, task, settings and Save to folder in "
+                                           "Make me after checking them. Nothing is generated until you click Generate.")
+            self.hist_reuse_btn.clicked.connect(self.reuse_settings)
+            lay.addWidget(self.hist_reuse_btn)
             self.update_history_buttons()
             return page
 
@@ -1224,7 +1318,8 @@ def run_app() -> int:
                 return
             if again:
                 return self.load_history()
-            keep = self.history_list.currentRow()
+            current = self.current_history()
+            keep_id = current["generation_id"] if current else None
             self.history_records = result["records"]
             self.history_list.clear()
             for r in self.history_records:
@@ -1237,7 +1332,8 @@ def run_app() -> int:
             self.history_note.setText("\n".join(notes))
             self.history_note.setStyleSheet(f"color: {COLORS['error']};" if result["warnings"] else "")
             if self.history_records:
-                self.history_list.setCurrentRow(min(max(keep, 0), len(self.history_records) - 1))
+                ids = [r["generation_id"] for r in self.history_records]
+                self.history_list.setCurrentRow(ids.index(keep_id) if keep_id in ids else 0)
             else:
                 self.show_history_record(-1)
 
@@ -1262,6 +1358,8 @@ def run_app() -> int:
             o = self.current_history_output()
             self.hist_doc_btn.setEnabled(bool(o and o.get("_status") == "available"))
             self.hist_folder_btn.setEnabled(bool(r and r.get("_output_root_status") == "available"))
+            if hasattr(self, "hist_reuse_btn"):
+                self.hist_reuse_btn.setEnabled(r is not None and self.thread is None)
 
         def current_history_output(self):
             r = self.current_history()
@@ -1289,17 +1387,176 @@ def run_app() -> int:
                 return self.load_history()
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+        # ---------- Reuse settings (P3-M4): check off the UI thread, restore, explicit corrections ----------
+        def run_call(self, kind, fn):
+            """fn() on a CallWorker; on_<kind>(value) runs on the UI thread. Several may overlap."""
+            self.call_seq += 1
+            job = self.call_seq
+
+            def wrapped():
+                try:
+                    value = fn()
+                except Exception as e:  # keep the job id, so the thread is always collected
+                    value = {"error": f"Unexpected error ({type(e).__name__})."}
+                return {"_job": job, "_kind": kind, "value": value}
+            thread, worker = QThread(), CallWorker(wrapped)
+            worker.moveToThread(thread)
+            thread.started.connect(worker.run)
+            worker.finished.connect(self.call_done)
+            self.call_jobs[job] = (thread, worker)
+            thread.start()
+
+        def call_done(self, result):
+            thread, _ = self.call_jobs.pop(result.get("_job"), (None, None))
+            if thread is not None:
+                thread.quit()
+                thread.wait()
+            if "_kind" in result:
+                getattr(self, "on_" + result["_kind"])(result["value"])
+
+        def reuse_settings(self):
+            r = self.current_history()
+            if r is None or self.state is None or self.thread is not None:
+                return
+            self.reuse_seq += 1
+            seq, root, record = self.reuse_seq, self.state["root"], dict(r)
+            self.status.setText(f"Checking the saved inputs of {r['task_label']} before reusing them...")
+            self.run_call("reuse_checked", lambda: dict(history.check_reuse(root, record), seq=seq))
+
+        def on_reuse_checked(self, check):
+            if self.state is None or check.get("seq") != self.reuse_seq or check.get("root") != str(self.state["root"]):
+                return  # an older request, or another workshop: never applied
+            if "error" in check:
+                self.status.setText("Error: the saved settings could not be checked. " + check["error"])
+                return
+            self.reuse = check
+            self.clear_search_box()
+            apply_reuse(self.state, check)
+            self.anchor = None
+            task = tasks.TASKS.get(check["task_id"])
+            if task and not check["task_problem"]:
+                params = check["parameters"]
+                self.output_type.setCurrentText(task["output_type"])
+                self.output_type_changed(task["output_type"])
+                self.task_box.setCurrentIndex(self.task_box.findData(check["task_id"]))
+                self.task_changed()
+                if "language_style" in params and task["output_type"] == tasks.SINGLE_FILE:
+                    self.style_box.setCurrentText(params["language_style"])
+                if "days" in params:
+                    self.days_box.setValue(params["days"])
+                    self.folder_edit.setText(params.get("folder_name", ""))
+            self.efficient_box.setChecked(bool(check["efficient"]))
+            self.mode_group.button(1).setChecked(True)
+            self.mode_changed(1)
+            self.refresh()
+            n = len(reuse_blockers(self.reuse, self.state))
+            self.status.setText(f"Restored the settings of {check['task_label']} "
+                                f"({check['completed_at'].replace('T', ' ')[:16]}). "
+                                + (f"{n} item(s) need your attention before Generate." if n else
+                                   "Review them, then click Generate."))
+
+        def render_reuse(self):
+            while self.reuse_rows.count():
+                item = self.reuse_rows.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            reuse = self.reuse
+            if not reuse or reuse["root"] != str(self.state["root"]):
+                self.reuse_box.setVisible(False)
+                return
+            pending = reuse_blockers(reuse, self.state)
+            self.reuse_box.setVisible(True)
+            self.reuse_title.setText(f"Reusing {reuse['task_label']} · {reuse['completed_at'].replace('T', ' ')[:16]}"
+                                     + ("" if pending else ". Everything checks out; nothing runs until Generate."))
+
+            def add(text, button=None, fn=None):
+                row = QWidget()
+                hl = QHBoxLayout(row)
+                hl.setContentsMargins(0, 0, 0, 0)
+                lbl = QLabel(text)
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet(f"color: {COLORS['error']};" if button else "")
+                hl.addWidget(lbl, 1)
+                if button:
+                    b = QPushButton(button)
+                    b.clicked.connect(lambda _=False: self.later(fn))
+                    hl.addWidget(b)
+                self.reuse_rows.addWidget(row)
+            if "task" in pending:
+                add(pending["task"], "Use settings shown", self.reuse_use_shown)
+            if "destination" in pending:
+                add(pending["destination"], "Save to current folder", self.reuse_use_current_folder)
+            for e in reuse["inputs"]:
+                key = "input:" + e["rel"]
+                if key in pending and e["status"] == "unsafe":
+                    add(pending[key], "Leave it out", lambda rel=e["rel"]: self.reuse_drop(rel))
+                elif key in pending and e["status"] == "changed":
+                    add(pending[key], "Accept current file", lambda rel=e["rel"]: self.reuse_accept(rel))
+                elif e["status"] in ("missing", "unusable") and e["path"] and Path(e["path"]) in self.state["selected"]:
+                    add(e["message"] + " (see Selected Inputs)")
+                elif e.get("accepted") and e.get("page_problem"):
+                    add(f"Accepted the current {e['rel']}, but its pages need fixing: {e['page_problem']}")
+            self.reuse_done_btn.setVisible(not pending)
+
+        def reuse_entry(self, rel):
+            return next(e for e in self.reuse["inputs"] if e["rel"] == rel)
+
+        def reuse_use_shown(self):
+            if self.reuse:
+                self.reuse["task_resolved"] = True
+                self.refresh_selected()
+
+        def reuse_use_current_folder(self):
+            if self.reuse:
+                self.reuse["destination"]["resolved"] = True
+                self.refresh_selected()
+
+        def reuse_drop(self, rel):
+            if self.reuse:
+                self.reuse_entry(rel)["dropped"] = True
+                self.refresh_selected()
+
+        def reuse_accept(self, rel):
+            """Re-check the file now (hash + pages against its current page count), then accept it."""
+            if not self.reuse:
+                return
+            seq, root, e = self.reuse_seq, self.state["root"], dict(self.reuse_entry(rel))
+            saved = {"path": e["rel"], "pages": e["pages"], "fingerprint": e["fingerprint"]}
+            self.status.setText(f"Checking the current {rel}...")
+            self.run_call("reuse_accepted", lambda: dict(history.check_input(root, saved), seq=seq, root=str(root)))
+
+        def on_reuse_accepted(self, fresh):
+            if not self.reuse or fresh.get("seq") != self.reuse_seq or fresh.get("root") != self.reuse["root"]:
+                return
+            e = self.reuse_entry(fresh["rel"])
+            e.update({k: v for k, v in fresh.items() if k not in ("seq", "root")})
+            if e["status"] in ("ok", "changed"):
+                e["accepted"] = True
+                self.page_info.pop(Path(e["path"]), None)  # recount its pages for the Pages note
+                self.status.setText(f"Using the current {e['rel']}." + (f" Its pages need fixing: {e['page_problem']}"
+                                                                         if e["page_problem"] else ""))
+            else:
+                self.status.setText(f"Error: {e['message']}")
+            self.refresh_selected()
+
+        def close_reuse(self):
+            if self.reuse and not reuse_blockers(self.reuse, self.state):
+                self.reuse = None
+                self.refresh_selected()
+
         def retry_history(self):
             """Metadata only: save the kept records again (idempotent by generation_id); no Gemini call."""
-            if self.retry_thread is not None or not self.pending_history:
+            if self.retry_thread is not None or not (self.pending_history or self.pending_reconcile):
                 return
-            pending = dict(self.pending_history)
+            if self.thread is not None or self.org_thread is not None:
+                self.status.setText("Wait for the current operation to finish, then retry History.")
+                return
+            pending, reconciles = dict(self.pending_history), list(self.pending_reconcile)
             self.retry_history_btn.setEnabled(False)
             self.status.setText("Saving: Retrying History...")
 
-            def save_all(items=pending):
-                return {"retried": {gid: record_history(root, {"history_record": rec})
-                                    for gid, (root, rec) in items.items()}}
+            def save_all(items=pending, rec=reconciles):
+                return dict(retry_metadata(rec, items), count=len(rec))
             self.retry_thread = QThread()
             self.retry_worker = CallWorker(save_all)
             self.retry_worker.moveToThread(self.retry_thread)
@@ -1311,17 +1568,21 @@ def run_app() -> int:
             self.retry_thread.quit()
             self.retry_thread.wait()
             self.retry_thread = None
-            outcomes = result.get("retried", {})
-            failed = [o["message"] for o in outcomes.values() if not o["saved"]]
+            outcomes = result.get("records", {})
+            failed = [o["message"] for o in outcomes.values() if not o["saved"]] + result.get("failed_reconciles", [])
             for gid, o in outcomes.items():
                 if o["saved"]:
                     self.pending_history.pop(gid, None)
-            if not outcomes:
+            if "records" not in result:
                 failed = result.get("errors") or ["Unexpected error."]
-            self.retry_history_btn.setVisible(bool(self.pending_history))
+            elif not result.get("failed_reconciles"):
+                del self.pending_reconcile[:result.get("count", 0)]
+            self.retry_history_btn.setVisible(bool(self.pending_history or self.pending_reconcile))
             self.retry_history_btn.setEnabled(True)
+            done = (["History entries saved (the PDFs were already saved)"] if outcomes else []) + (
+                ["History paths updated for the earlier file changes"] if result.get("count") else [])
             self.status.setText(("History still not saved: " + " ".join(failed)) if failed else
-                                "History saved. The PDFs were already saved; nothing was sent to Gemini.")
+                                "; ".join(done) + ". No file was moved again and nothing was sent to Gemini.")
             if self.mode_stack.currentIndex() == 2:
                 self.load_history()
 
@@ -1407,7 +1668,7 @@ def run_app() -> int:
         def refresh_selected(self):
             """Selected Inputs from the one workshop selection; Generate eligibility from make_me_status()."""
             selected = workshops.selected_sorted(self.state)
-            status = make_me_status(self.state, self.page_info)
+            status = make_me_status(self.state, self.page_info, self.reuse)
             self.selected_list.clear()
             self.page_notes = {}
             folders = 0
@@ -1471,6 +1732,7 @@ def run_app() -> int:
             self.open_doc_btn.setEnabled(bool(self.last_paths))
             self.open_folder_btn.setEnabled(bool(self.last_paths))
             self.count_selected_pages()
+            self.render_reuse()
 
         # ---------- PDF pages (P3-M2): page counts off the UI thread; text lives in state["pages"] ----------
         def style_page_note(self, path):
@@ -1650,7 +1912,7 @@ def run_app() -> int:
             self.status.setText(f"Showing {p.name} in {workshops.relative(self.state, p.parent)}.")
 
         def closeEvent(self, event):
-            for t in (self.pages_thread, self.hist_thread, self.retry_thread):
+            for t in [self.pages_thread, self.hist_thread, self.retry_thread] + [t for t, _ in self.call_jobs.values()]:
                 if t is not None:
                     t.quit()
                     t.wait()
@@ -1732,7 +1994,7 @@ def run_app() -> int:
 
         def apply_tag(self, tag, path):
             """A chip dropped on a browser row: reserve tag_N, then plan and run one rename."""
-            if self.tags is None or self.thread is not None or self.org_thread is not None:
+            if self.tags is None or self.busy():
                 return
             if not path or Path(path).is_dir():
                 self.status.setText("Drop a tag on a file; nothing was renamed.")
@@ -1834,7 +2096,7 @@ def run_app() -> int:
 
         # ---------- drag and drop: this UI starts drags and finds targets; organizing.plan_drop validates ----------
         def busy(self):
-            return self.thread is not None or self.org_thread is not None
+            return self.thread is not None or self.org_thread is not None or self.retry_thread is not None
 
         def drop_allowed(self, md, folder):
             """Hover check behind the cursor and highlight; plan_drop repeats it with full validation."""
@@ -1906,7 +2168,9 @@ def run_app() -> int:
 
         # ---------- organizer: click -> capture -> plan -> (confirm) -> execute off-thread -> reconcile ----------
         def organize(self, action):
-            if self.org_thread is not None or self.thread is not None:
+            if self.busy():
+                if self.retry_thread is not None:
+                    self.status.setText("Wait for the History retry to finish, then try again.")
                 return
             request = organizing.capture_request(self.state, action)  # snapshot before any dialog
             if action in ("wrap", "super_wrap"):
@@ -1973,14 +2237,29 @@ def run_app() -> int:
                 organizing.clipboard_after(result)
             except Exception:
                 pass  # clipboard trouble must not hide the file report
+            hist = result.get("history") or {}
+            moves = history.confirmed_moves(result["outcomes"])
+            for gid, (root, rec) in list(self.pending_history.items()):  # unsaved records follow the move too
+                if moves and os.path.normcase(str(root)) == os.path.normcase(str(result["root"])):
+                    self.pending_history[gid] = (root, history.remap_record(rec, root, moves)[0])
+            hist_note = ""
+            if hist.get("needed") and not hist.get("ok"):
+                self.pending_reconcile.append((result["root"], hist["moves"], hist["at"]))
+                hist_note = (f"\nThe file changes above are done, but History paths were not updated: {hist['message']} "
+                             "Use Retry saving history (metadata only; no file is moved again).")
+            elif hist.get("warning"):
+                hist_note = "\n" + hist["warning"]
+            self.retry_history_btn.setVisible(bool(self.pending_history or self.pending_reconcile))
             self.refresh()
             if self.search_edit.text().strip():
                 self.start_search()  # moved/deleted entries change the matches
-            self.status.setText((describe_drop(result, drop) if drop else describe_outcomes(result)) + tag_note)
+            self.status.setText((describe_drop(result, drop) if drop else describe_outcomes(result)) + tag_note + hist_note)
+            if moves and self.mode_stack.currentIndex() == 2:
+                self.load_history()
 
         # ---------- generation ----------
         def generate(self):
-            if self.thread is not None or self.org_thread is not None or not make_me_status(self.state, self.page_info)["ok"]:
+            if self.thread is not None or self.org_thread is not None or not make_me_status(self.state, self.page_info, self.reuse)["ok"]:
                 return  # duplicate click while running, or the selection has entries Make me can't use
             request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
                                     self.efficient_box.isChecked())
@@ -1991,6 +2270,7 @@ def run_app() -> int:
                 return
             self.generate_btn.setEnabled(False)
             self.last_paths = []
+            self.reuse = None  # resolved by now; the request is captured
             self.status.setText("Starting...")
             self.thread = QThread()
             self.worker = Worker(request)

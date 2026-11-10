@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection) and P3-M3 (persistent generation history) are implemented** (see Implementation notes); P3-M4 through P3-M6 are proposed and pending implementation.
+Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection), P3-M3 (persistent generation history) and P3-M4 (reuse history and reconcile paths) are implemented** (see Implementation notes); P3-M5 and P3-M6 are proposed and pending implementation.
 
 1. Search across the workshop.
 2. Choose PDF pages for generation.
@@ -85,7 +85,7 @@ Use plain values and functions for search, page parsing, record validation and p
 | P3-M1 — Workshop search (**implemented**) | Existing workshop browser | Name search, relative-path results, selection and open/location actions | Search a disposable workshop with duplicate filenames in different subfolders. Select a result and open a PDF. Clear search and confirm the selection and captured destination behavior. A stale query cannot replace newer results. Links outside the workshop are skipped. |
 | P3-M2 — PDF page selection end to end (**implemented**; the compile-dependent pipeline tests were blocked by MiKTeX) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
 | P3-M3 — Persistent generation history (**implemented**; verified with stubbed Gemini/LaTeX, no real generation) | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
-| P3-M4 — Reuse history and reconcile paths | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
+| P3-M4 — Reuse history and reconcile paths (**implemented**; verified with stubbed Gemini/LaTeX) | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
 | P3-M5 — Persistent study progress | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
 | P3-M6 — Integrated demo and handoff | P3-M1 through P3-M5 | Working packaged flow and current implementation documentation | Run the walkthrough below in the Windows build. Verify search and page helpers are included, PDF opening works, history/progress survive restart, and one existing All pages generation still succeeds. Update affected sections of architecture, workflow and README with observed behavior. |
 
@@ -104,7 +104,7 @@ Use the repository's cheapest meaningful check at each milestone. Reuse existing
 
 ## Implementation notes
 
-Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M4 through P3-M6 are pending.
+Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M5 and P3-M6 are pending.
 
 ### P3-M1 — Workshop search (implemented 2026-11-09)
 
@@ -148,7 +148,7 @@ Add verified outcomes, relevant checks and remaining limitations as each milesto
   18/18 checks passed. The script was a one-off check and is not in the repository.
 - **Other tests:** the existing `test_search`, `test_selection`, `test_drag_drop`, `test_organizing`, `test_name_tags`, `test_executor`, `test_super_wrap` and `test_downloads` suites pass.
 - **Blocked (environment):**
-  - **LaTeX compile tests:** three `tests.test_latex_pipeline` tests that compile with lualatex fail on this PC, and so does the sandbox test, which calls `compile_document` directly and doesn't involve any P3-M2 code. MiKTeX tries to rebuild `lualatex.fmt` from inside the restricted compiler process, and Windows refuses (`CreateProcess`, error 1816, "Not enough quota"). The non-compiling pipeline tests pass. Rebuilding the format once outside the app (`miktex formats build lualatex --engine luahbtex`) should unblock them; this was not done here.
+  - **LaTeX compile tests:** three of the six `tests.test_latex_pipeline` tests fail on this PC. Two are generation tests that compile with lualatex; the third is the sandbox test, which calls `compile_document` directly and doesn't involve any P3-M2 code. (Corrected 2026-11-09 during P3-M4; this was first reported as three generation tests plus the sandbox test.) MiKTeX tries to rebuild `lualatex.fmt` from inside the restricted compiler process, and Windows refuses (`CreateProcess`, error 1816, "Not enough quota"). The non-compiling pipeline tests pass. Rebuilding the format once outside the app (`miktex formats build lualatex --engine luahbtex`) should unblock them; this was not done here.
   - **Real Gemini run:** no real Gemini request was made.
 - **Limitations:**
   - A Pages field is committed with Enter or Tab (on focus loss), not while typing.
@@ -197,3 +197,52 @@ Add verified outcomes, relevant checks and remaining limitations as each milesto
   - Opening a different workshop's History needs that workshop to be open.
   - There is no delete or clear for History entries.
   - Organizer moves do not yet remap stored paths; that is P3-M4. A moved output simply shows as unavailable.
+
+### P3-M4 — Reuse history and reconcile paths (implemented 2026-11-09)
+
+- **Built:**
+  - `history.py` (all Qt-free):
+    - `confirmed_moves`, `remap_record`, and `reconcile` (serialized, atomic, limited by `before`);
+    - `now_stamp` (microsecond times);
+    - `check_input` and `check_reuse`;
+    - `save_record` is now first-write-wins.
+  - `ui.py`, Qt-free helpers: `reconcile_history`, `retry_metadata`, `apply_reuse`, `reuse_blockers`, and `make_me_status(…, reuse)`.
+  - `ui.py`, window changes:
+    - `OrganizeWorker` reconciles History after the file operations;
+    - `organize_finished` remaps pending records, records `pending_reconcile` and reports it;
+    - **Retry saving history** handles both kinds of pending work;
+    - `busy()` includes the retry;
+    - History has **Reuse settings**, keeps the selected entry by `generation_id`, and has the Make me reuse panel with explicit corrections.
+- **Decisions:**
+  - Reuse replaces the current selection.
+  - Missing inputs are restored as `[missing]` entries, so the user removes them explicitly; unsafe inputs are never added to the selection and need **Leave it out**.
+  - When the saved task settings are invalid, the widgets are left as they are and Generate waits for **Use settings shown**.
+  - An unavailable destination is never replaced automatically.
+  - Reuse is cleared when Generate starts or another workshop opens.
+  - A changed file's acceptance applies to the file as re-checked at that moment; the pipeline revalidates again at Generate.
+  - Reconcile skips records completed after the move. This matters for a delayed metadata retry, when a new file may exist at the old path. Record and move times now carry microseconds, so a record completed in the same second as the move is no longer remapped. That same-second case was found while writing the tests.
+  - Organizer actions wait for a running History retry, and a retry waits for running jobs, so a retry can never run against paths an organizer action is changing.
+- **Verified:** in the same throwaway venv (Python 3.12, PySide6 6.12.0, pypdf 7.0.0).
+  - **`python -m unittest tests.test_reuse -v`, 9 tests passing:**
+    - Reuse restores the selection, `1, 3-4`, `Simple`, Efficient on and `Revision` from another folder, and `build_request` matches, with zero client calls.
+    - A changed 2-page PDF reports `changed` and `has 2 pages; page 4 is out of range`. A deleted TXT stays `[missing]`, and a renamed destination reports unavailable while the current folder stays put. Generate stays blocked until each is corrected. **Accept current file** re-checks pages (now valid for `1-2`), and the stored record is byte-for-byte unchanged.
+    - A junction input is `unsafe` and an invalid style is a `task_problem`; both block until handled explicitly, and another workshop's reuse is ignored.
+    - A real organizer move of `Revision/Week 5` to `Archive` remaps `output_root` and all six output paths (ids, roles and days unchanged). Every output resolves as available, and the other entry is untouched.
+    - A real move of the input PDF plus a real tag rename records `Archive/notes_1.pdf` with the same pages and fingerprint, and Reuse sees it as `ok`.
+    - In a run where one move completed, one failed, one was unattempted, plus a `copied_source_kept` and a `copied` item, only the completed move counts.
+    - A stale save of the pre-move record returns `already_saved` and keeps the new paths. A pending, unsaved record remapped in memory is saved with the new paths.
+    - A forced write failure after a real move leaves the file moved and History unchanged. `retry_metadata` then updates History with `organizing.execute_plan` never called and zero client calls, and a later record at the old path is not touched.
+    - A corrupt file is left byte-identical with a warning naming it.
+  - **Other tests:** all 80 non-LaTeX tests pass.
+  - **Offscreen Qt check, 16/16:**
+    - the real **Reuse settings** button restores the Pages note `Pages 1, 3-4 (3 of 5)`, task `summary`, `Simple`, Efficient on and `Save to: Revision`, switches to Make me, and leaves Generate enabled with no job and zero calls;
+    - after editing the PDF, Generate is off with `…changed since this generation…`, and **Accept current file** re-enables it;
+    - a real `handle_drop` move of `Revision/Week 5` to `Archive` reloads History, keeps the same entry selected and remaps every output. Open output folder and Open document use `Archive/Week 5/…`;
+    - with History writes forced to fail, a real move of `extra.txt` reports that History paths were not updated and shows Retry. Retry updates the path with no file changes and zero calls.
+
+    The P3-M3 History check (11/11) and the P3-M1/M2 check (18/18) still pass. These were one-off scripts and are not in the repository.
+- **Not verified (environment):** three of the six `tests.test_latex_pipeline` tests still fail. Two are generation tests that compile with lualatex, and the third is the sandbox test. All fail on the same MiKTeX error, re-checked today: `lualatex.fmt` rebuild, `CreateProcess` error 1816 "Not enough quota". So no real generation ran for P3-M2 through P3-M4; publication was exercised with stubbed rendering. No real Gemini call was made.
+- **Limitations:**
+  - An unsaved retry record is kept only in memory, so it is lost if the app closes.
+  - Moves made outside the app, for example in Explorer, are not followed; those entries show as unavailable.
+  - Reuse restores one entry at a time and doesn't merge it with the current selection.

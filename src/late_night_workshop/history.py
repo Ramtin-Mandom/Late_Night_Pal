@@ -16,7 +16,14 @@ Record (version 1). Every path is workshop-relative POSIX ("." = the root):
 Excluded by construction: API keys, source contents, model responses, temp paths.
 
 Writes are atomic (unique temp file + os.replace) and every read-modify-write runs under one
-process-wide lock. save_record() is idempotent by generation_id. A file that can't be used
+process-wide lock. save_record() is idempotent by generation_id and first-write-wins: once a
+record is stored, only reconcile() changes its paths, so a late or repeated save/retry can never
+bring back paths from before an organizer move (P3-M4).
+reconcile(root, outcomes, before) applies confirmed organizer moves (status completed, change
+moved: Move, Wrap, Rip, Super Wrap, cut-Paste, drag move, tag rename) to every stored path,
+descendants included; deletions, copies and copied_source_kept leave records as they were
+(a deleted path simply resolves as missing). check_reuse(root, record) validates a record
+against the current files for Reuse settings without changing anything. A file that can't be used
 (bad JSON, wrong schema, newer version) is never overwritten: load reports it, and the next save
 moves it aside to "<name>.unreadable-<time>.json" before writing a fresh file.
 """
@@ -29,7 +36,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from . import AppError, workshops
+from . import AppError, inputs, pdf_pages, tasks, workshops
 
 SCHEMA = "late-night-pal/history"
 VERSION = 1
@@ -63,7 +70,7 @@ def build_record(generation_id: str, root, destination, task: dict, efficient: b
     root = Path(root).resolve()
     return {
         "generation_id": generation_id,
-        "completed_at": completed_at or datetime.now().astimezone().isoformat(timespec="seconds"),
+        "completed_at": completed_at or now_stamp(),
         "task_id": task["task_id"],
         "task_label": task["label"],
         "parameters": dict(task["parameters"]),
@@ -147,8 +154,14 @@ def load(root) -> dict:
     if skipped:
         warnings.append(f"{skipped} history entr{'y' if skipped == 1 else 'ies'} could not be read and "
                         f"{'is' if skipped == 1 else 'are'} hidden; they stay in {f}.")
-    order = {id(r): i for i, r in enumerate(records)}  # same second: the later-saved record is newer
-    records.sort(key=lambda r: (r["completed_at"], order[id(r)]), reverse=True)
+    order = {id(r): i for i, r in enumerate(records)}  # same instant: the later-saved record is newer
+
+    def when(r):
+        try:
+            return datetime.fromisoformat(r["completed_at"]).timestamp()
+        except (TypeError, ValueError):
+            return 0.0
+    records.sort(key=lambda r: (when(r), order[id(r)]), reverse=True)
     return {"root": str(Path(root).resolve()), "records": records, "warnings": warnings}
 
 
@@ -183,14 +196,159 @@ def save_record(root, record: dict) -> dict:
                 data = None
             data = data or {"schema": SCHEMA, "version": VERSION, "workshop_root": str(Path(root).resolve()),
                             "records": []}
-            data["records"] = [r for r in data["records"]
-                               if not (isinstance(r, dict) and r.get("generation_id") == record["generation_id"])]
+            if any(isinstance(r, dict) and r.get("generation_id") == record["generation_id"] for r in data["records"]):
+                return {"file": str(f), "moved_aside": None, "already_saved": True}  # stored paths win
             data["records"].append(record)
             _atomic_write(f, data)
         except OSError as e:
             raise HistoryError("history_not_saved", f"History could not be saved ({e.strerror or e}).",
                                retryable=True) from None
-    return {"file": str(f), "moved_aside": str(moved) if moved else None}
+    return {"file": str(f), "moved_aside": str(moved) if moved else None, "already_saved": False}
+
+
+# ---------- P3-M4: organizer reconciliation ----------
+def confirmed_moves(outcomes) -> list[dict]:
+    """Only completed moves change history; failed, unattempted, copies and deletions never do."""
+    return [o for o in outcomes or [] if o.get("status") == "completed" and o.get("change") == "moved"
+            and o.get("source") and o.get("destination")]
+
+
+def _remap_rel(root: Path, rel: str, moves) -> str:
+    if not _is_rel(rel):
+        return rel
+    old = root.joinpath(*PurePosixPath(rel).parts)
+    new = workshops.remap_paths([old], moves)[0]  # moves only: remap_paths never drops here
+    out = os.path.relpath(new, root).replace("\\", "/")
+    return rel if out.startswith("..") or os.path.isabs(out) else out
+
+
+def remap_record(record: dict, root, outcomes) -> tuple[dict, bool]:
+    """A copy of record with input, destination, output-folder and output paths moved by the
+    confirmed moves; ids, roles, days, page choices and fingerprints are untouched."""
+    moves = confirmed_moves(outcomes)
+    if not moves:
+        return record, False
+    root = Path(root).resolve()
+    new = json.loads(json.dumps(record))
+    new["destination"] = _remap_rel(root, record["destination"], moves)
+    new["output_root"] = _remap_rel(root, record["output_root"], moves)
+    for i in new["inputs"]:
+        i["path"] = _remap_rel(root, i["path"], moves)
+    for o in new["outputs"]:
+        o["path"] = _remap_rel(root, o["path"], moves)
+    return new, new != record
+
+
+def now_stamp() -> str:
+    """Local ISO-8601 time with microseconds and offset (fine enough to order a move and a save)."""
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
+
+
+def _after(stamp: str, before: str) -> bool:
+    try:
+        return datetime.fromisoformat(stamp) > datetime.fromisoformat(before)
+    except (TypeError, ValueError):
+        return stamp > before
+
+
+def reconcile(root, outcomes, before: str | None = None) -> dict:
+    """Serialized read-modify-write: apply confirmed moves to the stored records completed at or
+    before `before` (default: all). {"changed": n, "warning": str|None}; raises HistoryError
+    (history_not_reconciled) if the file can't be written. An unusable file is left untouched."""
+    moves = confirmed_moves(outcomes)
+    if not moves:
+        return {"changed": 0, "warning": None}
+    f = history_file(root)
+    with _LOCK:
+        data, bad = _read(f)
+        if bad:
+            return {"changed": 0, "warning": f"History for this workshop {bad}, so its paths were not updated. "
+                                             f"The file was left untouched for recovery: {f}."}
+        if data is None:
+            return {"changed": 0, "warning": None}
+        changed = 0
+        for k, r in enumerate(data["records"]):
+            if record_problem(r) or (before and _after(r["completed_at"], before)):
+                continue  # invalid records stay as they are; newer records already use the new paths
+            new, did = remap_record(r, root, moves)
+            if did:
+                data["records"][k] = new
+                changed += 1
+        if changed:
+            try:
+                _atomic_write(f, data)
+            except OSError as e:
+                raise HistoryError("history_not_reconciled", f"History paths could not be updated "
+                                   f"({e.strerror or e}).", retryable=True) from None
+    return {"changed": changed, "warning": None}
+
+
+# ---------- P3-M4: Reuse settings ----------
+def _fingerprint(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return "sha256:" + h.hexdigest()
+
+
+def check_input(root, entry: dict) -> dict:
+    """One recorded input against the current file (hashing and PDF inspection: off the UI thread).
+    status: ok | changed | missing | unusable | unsafe;  page_problem for an invalid page choice."""
+    root = Path(root).resolve()
+    rel, pages = entry["path"], entry.get("pages")
+    path, where = resolve(root, rel)
+    out = {"rel": rel, "path": str(path) if path else None, "pages": list(pages) if pages else None,
+           "fingerprint": entry["fingerprint"], "current_fingerprint": None, "page_count": None,
+           "page_problem": None, "status": "ok", "message": None}
+    if where == "outside":
+        out.update(status="unsafe", message=f"{rel} is outside the workshop or reached through a link or "
+                                             "junction, so it can't be reused.")
+        return out
+    if where == "missing":
+        out.update(status="missing", message=f"{rel} no longer exists. Remove it from Selected Inputs or "
+                                              "restore the file.")
+        return out
+    blocked = inputs.generation_blockers([path])
+    if blocked:
+        out.update(status="unusable", message=f"{rel} {next(iter(blocked.values()))}.")
+        return out
+    try:
+        out["current_fingerprint"] = _fingerprint(path)
+    except OSError as e:
+        out.update(status="unusable", message=f"{rel} could not be read ({e.strerror or e}).")
+        return out
+    if path.suffix.lower() == ".pdf":
+        try:
+            out["page_count"] = pdf_pages.inspect(path)
+            pdf_pages.validate(pages, out["page_count"], rel)
+        except pdf_pages.PageError as e:
+            out["page_problem"] = e.message
+    if out["current_fingerprint"] != entry["fingerprint"]:
+        out.update(status="changed", message=f"{rel} changed since this generation (its contents differ). "
+                                             "Accept the current file to use it, or remove it.")
+    return out
+
+
+def check_reuse(root, record: dict) -> dict:
+    """Everything Reuse settings needs, validated against the workshop as it is now. Read-only."""
+    root = Path(root).resolve()
+    out = {"root": str(root), "generation_id": record["generation_id"], "task_id": record["task_id"],
+           "task_label": record["task_label"], "completed_at": record["completed_at"],
+           "parameters": dict(record["parameters"]), "efficient": record["efficient"], "task_problem": None,
+           "inputs": [check_input(root, i) for i in record["inputs"]]}
+    try:
+        tasks.validate_parameters(record["task_id"], record["parameters"])
+    except tasks.TaskError as e:
+        out["task_problem"] = f"{record['task_label']}: {e.message}"
+    except Exception as e:
+        out["task_problem"] = f"{record['task_label']}: the saved settings can't be used ({type(e).__name__})."
+    path, where = resolve(root, record["destination"])
+    shown = "Workshop root" if record["destination"] == "." else record["destination"]
+    out["destination"] = {"rel": record["destination"], "path": str(path) if path else None,
+                          "problem": None if where == "available" and path.is_dir() else
+                          f"The saved destination {shown} is unavailable (moved, deleted or outside the workshop)."}
+    return out
 
 
 def resolve(root, rel: str):
