@@ -12,7 +12,8 @@ import threading
 import time
 from pathlib import Path
 
-from . import downloads, generation, inputs, name_tags, organizing, pdf_pages, resource_path, search, tasks, workshops
+from . import (downloads, generation, history, inputs, name_tags, organizing, pdf_pages, resource_path, search, tasks,
+               workshops)
 
 from .theme import COLORS
 
@@ -49,6 +50,64 @@ def open_pdf(path) -> bool:
 
 
 SEARCH_DEBOUNCE_MS = 250
+
+
+def record_history(workshop_root, result: dict) -> dict:
+    """Save a successful result's history record (worker thread or retry). Never raises:
+    {"saved": True, "note"} or {"saved": False, "message", "record"} (record kept for a retry)."""
+    record = result.get("history_record")
+    if record is None:
+        return {"saved": False, "record": None,
+                "message": result.get("history_error") or "No history entry was prepared."}
+    try:
+        info = history.save_record(workshop_root, record)
+    except history.HistoryError as e:
+        return {"saved": False, "record": record, "message": e.message}
+    note = (f" The unreadable history file was kept as {info['moved_aside']}." if info.get("moved_aside") else "")
+    return {"saved": True, "note": note}
+
+
+def describe_saved(result: dict) -> str:
+    """Status after a successful Generate: saved paths, then whether History was updated."""
+    if len(result["paths"]) == 1:
+        text = "Saved: " + result["paths"][0]
+    else:
+        root = Path(result["output_root"])
+        text = f"Saved {len(result['paths'])} PDFs in {root}:\n" + "\n".join(
+            Path(p).relative_to(root).as_posix() for p in result["paths"])
+    h = result.get("history") or {}
+    if h.get("saved"):
+        text += "\nAdded to History." + h.get("note", "")
+    elif h:
+        text += (f"\nThe PDFs above were saved, but History was not updated: {h['message']}"
+                 + ("\nUse Retry saving history; nothing will be sent to Gemini again." if h.get("record") else ""))
+    if result.get("warnings"):
+        text += "\n" + "\n".join(w["message"] for w in result["warnings"])
+    return text
+
+
+def describe_history_record(r: dict) -> str:
+    """One History row: task and time, inputs with page choices, settings, outputs."""
+    when = r["completed_at"].replace("T", " ")[:16]
+    inputs = ", ".join(i["path"] + (f" (pages {pdf_pages.format_pages(i['pages'])})" if i.get("pages") else "")
+                       for i in r["inputs"])
+    params = r["parameters"]
+    settings = [f"{params['language_style']} style"] if params.get("language_style") else []
+    if params.get("days"):
+        settings.append(f"{params['days']} day{'s' * (params['days'] != 1)}")
+    settings.append("Efficient on" if r["efficient"] else "Efficient off")
+    settings.append("Save to: " + ("Workshop root" if r["destination"] == "." else r["destination"]))
+    missing = sum(1 for o in r["outputs"] if o.get("_status", "available") != "available")
+    n = len(r["outputs"])
+    where = "Workshop root" if r["output_root"] == "." else r["output_root"]
+    outputs = f"{n} PDF{'s' * (n != 1)} in {where}" + (f" ({missing} unavailable)" if missing else "")
+    return f"{r['task_label']} · {when}\nInputs: {inputs}\n{' · '.join(settings)}\nOutputs: {outputs}"
+
+
+def describe_history_output(o: dict) -> str:
+    day = f", day {o['day']}" if o.get("day") else ""
+    state = "" if o.get("_status", "available") == "available" else "  (unavailable: moved or deleted)"
+    return f"{o['path']}  ·  {o['role']}{day}{state}"
 
 
 def search_is_current(request: dict, state: dict | None, query: str, seq: int) -> bool:
@@ -339,6 +398,9 @@ def run_app() -> int:
             try:
                 result = generation.generate(self.request, lambda ev: self.progress.emit(describe_progress(ev)),
                                              decide_inputs=self.decide)
+                if result["status"] == "ok":  # history only after publication, still off the UI thread
+                    self.progress.emit("Saving: Adding the result to History...")
+                    result["history"] = record_history(self.request["workshop_root"], result)
             except Exception as e:  # last-resort guard so the UI never hangs in "running"
                 result = {"status": "error", "error": {"message": f"Unexpected error ({type(e).__name__})."}}
             self.finished.emit(result)
@@ -639,6 +701,11 @@ def run_app() -> int:
             self.pages_thread = None
             self.pages_worker = None
             self.page_notes = {}  # path -> (QLineEdit, QLabel) of the visible Selected Inputs rows
+            self.pending_history = {}  # generation_id -> (workshop root, record) whose save failed (this session)
+            self.history_records = []  # records shown in the History view (open workshop only)
+            self.hist_thread = self.hist_worker = None
+            self.hist_reload = False
+            self.retry_thread = self.retry_worker = None
             self.last_paths = []
             self.last_output_root = None
             self.stack = QStackedWidget()
@@ -908,8 +975,8 @@ def run_app() -> int:
             modes = QHBoxLayout()
             self.mode_group = QButtonGroup(page)
             self.mode_stack = QStackedWidget()
-            for i, label in enumerate(("Organize", "Make me")):
-                b = decorate(QPushButton(label), "organize" if i == 0 else "make-me")
+            for i, label in enumerate(("Organize", "Make me", "History")):
+                b = decorate(QPushButton(label), ("organize", "make-me", "schedule")[i])
                 b.setCheckable(True)
                 self.mode_group.addButton(b, i)
                 modes.addWidget(b)
@@ -993,9 +1060,16 @@ def run_app() -> int:
             decorate(self.open_folder_btn, "folder")
             row.addWidget(self.open_doc_btn)
             row.addWidget(self.open_folder_btn)
+            self.retry_history_btn = QPushButton("Retry saving history")
+            self.retry_history_btn.setToolTip("Save the History entry again. The PDFs are already saved; "
+                                              "nothing is sent to Gemini.")
+            self.retry_history_btn.clicked.connect(self.retry_history)
+            self.retry_history_btn.setVisible(False)
+            row.addWidget(self.retry_history_btn)
             right.addStretch(1)
             self.mode_stack.addWidget(org_page)
             self.mode_stack.addWidget(form_scroll)
+            self.mode_stack.addWidget(self._history_page())
             right_outer.addWidget(self.save_lbl)
             right_outer.addWidget(self.generate_btn)
             right_outer.addLayout(row)
@@ -1062,16 +1136,194 @@ def run_app() -> int:
             self.last_paths = []
             self.status.setText("")
             self.clear_search_box()  # results and in-flight searches belong to the previous workshop
+            self.clear_history_view()  # entries of the previous workshop must not show here
             self.root_lbl.setText(f"{state['root'].name}   ·   {state['root']}")
             self.load_tags()
             self.refresh()
             self.reload_bin()  # startup reconciliation; the tray itself stays closed
             self.stack.setCurrentIndex(1)
+            if self.mode_stack.currentIndex() == 2:
+                self.load_history()
 
         def mode_changed(self, index):
-            """Switch Organize / Make me; selection and every Make me setting are untouched."""
+            """Switch Organize / Make me / History; selection and every Make me setting are untouched."""
             self.mode_stack.setCurrentIndex(index)
             self.refresh_selected()
+            if index == 2:
+                self.load_history()
+
+        # ---------- History (P3-M3): load off the UI thread, open actions recheck containment ----------
+        def _history_page(self):
+            page = QWidget()
+            lay = QVBoxLayout(page)
+            lay.setContentsMargins(0, 0, 0, 0)
+            top = QHBoxLayout()
+            top.addWidget(heading("History · this workshop"), 1)
+            reload_btn = decorate(QPushButton("Reload"), "refresh")
+            reload_btn.clicked.connect(self.load_history)
+            top.addWidget(reload_btn)
+            lay.addLayout(top)
+            self.history_note = QLabel("")
+            self.history_note.setWordWrap(True)
+            self.history_note.setProperty("role", "support")
+            lay.addWidget(self.history_note)
+            self.history_list = QListWidget()
+            self.history_list.setAccessibleName("Generation history, newest first")
+            self.history_list.setWordWrap(True)
+            self.history_list.currentRowChanged.connect(self.show_history_record)
+            lay.addWidget(self.history_list, 2)
+            lay.addWidget(heading("Outputs"))
+            self.history_outputs = QListWidget()
+            self.history_outputs.setAccessibleName("Outputs of the chosen generation")
+            self.history_outputs.currentRowChanged.connect(lambda *_: self.update_history_buttons())
+            self.history_outputs.itemDoubleClicked.connect(lambda *_: self.open_history_document())
+            lay.addWidget(self.history_outputs, 1)
+            row = QHBoxLayout()
+            self.hist_doc_btn = decorate(QPushButton("Open document"), "notes")
+            self.hist_doc_btn.clicked.connect(self.open_history_document)
+            self.hist_folder_btn = decorate(QPushButton("Open output folder"), "folder")
+            self.hist_folder_btn.clicked.connect(self.open_history_folder)
+            row.addWidget(self.hist_doc_btn)
+            row.addWidget(self.hist_folder_btn)
+            lay.addLayout(row)
+            self.update_history_buttons()
+            return page
+
+        def clear_history_view(self, note=""):
+            self.history_records = []
+            self.history_list.clear()
+            self.history_outputs.clear()
+            self.history_note.setText(note)
+            self.update_history_buttons()
+
+        def load_history(self):
+            if self.state is None:
+                return
+            if self.hist_thread is not None:
+                self.hist_reload = True  # one load at a time; run again when this one returns
+                return
+            self.history_note.setText("Loading history...")
+            root = self.state["root"]
+            self.hist_thread = QThread()
+            self.hist_worker = CallWorker(lambda r=root: history.view(r))
+            self.hist_worker.moveToThread(self.hist_thread)
+            self.hist_thread.started.connect(self.hist_worker.run)
+            self.hist_worker.finished.connect(self.history_loaded)
+            self.hist_thread.start()
+
+        def history_loaded(self, result):
+            self.hist_thread.quit()
+            self.hist_thread.wait()
+            self.hist_thread = None
+            again, self.hist_reload = self.hist_reload, False
+            if "root" not in result:  # CallWorker's last-resort fallback: report, don't loop
+                return self.clear_history_view("History could not be loaded: " + " ".join(result.get("errors", [])))
+            if self.state is None or result.get("root") != str(self.state["root"]):
+                if again or self.state is not None:
+                    self.load_history()  # result for another workshop: never shown here
+                return
+            if again:
+                return self.load_history()
+            keep = self.history_list.currentRow()
+            self.history_records = result["records"]
+            self.history_list.clear()
+            for r in self.history_records:
+                item = QListWidgetItem(describe_history_record(r))
+                item.setToolTip(f"Generation {r['generation_id']}")
+                self.history_list.addItem(item)
+            notes = list(result["warnings"])
+            if not self.history_records:
+                notes.append("No generations recorded for this workshop yet. Successful Make me results appear here.")
+            self.history_note.setText("\n".join(notes))
+            self.history_note.setStyleSheet(f"color: {COLORS['error']};" if result["warnings"] else "")
+            if self.history_records:
+                self.history_list.setCurrentRow(min(max(keep, 0), len(self.history_records) - 1))
+            else:
+                self.show_history_record(-1)
+
+        def current_history(self):
+            row = self.history_list.currentRow()
+            return self.history_records[row] if 0 <= row < len(self.history_records) else None
+
+        def show_history_record(self, row):
+            self.history_outputs.clear()
+            r = self.history_records[row] if 0 <= row < len(self.history_records) else None
+            for o in (r or {}).get("outputs", []):
+                item = QListWidgetItem(describe_history_output(o))
+                if o.get("_status") != "available":
+                    item.setForeground(QBrush(QColor(COLORS["muted"])))
+                self.history_outputs.addItem(item)
+            if r and r["outputs"]:
+                self.history_outputs.setCurrentRow(0)
+            self.update_history_buttons()
+
+        def update_history_buttons(self):
+            r = self.current_history()
+            o = self.current_history_output()
+            self.hist_doc_btn.setEnabled(bool(o and o.get("_status") == "available"))
+            self.hist_folder_btn.setEnabled(bool(r and r.get("_output_root_status") == "available"))
+
+        def current_history_output(self):
+            r = self.current_history()
+            row = self.history_outputs.currentRow()
+            return r["outputs"][row] if r and 0 <= row < len(r["outputs"]) else None
+
+        def open_history_document(self):
+            o = self.current_history_output()
+            if o is None or self.state is None:
+                return
+            path, status = history.resolve(self.state["root"], o["path"])
+            if status != "available" or not path.is_file():
+                self.status.setText(f"Error: {o['path']} is unavailable (moved, deleted or outside the workshop). "
+                                    "History now marks it unavailable.")
+                return self.load_history()
+            self.view_pdf(str(path))
+
+        def open_history_folder(self):
+            r = self.current_history()
+            if r is None or self.state is None:
+                return
+            path, status = history.resolve(self.state["root"], r["output_root"])
+            if status != "available" or not path.is_dir():
+                self.status.setText(f"Error: the output folder {r['output_root']} is unavailable (moved or deleted).")
+                return self.load_history()
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+        def retry_history(self):
+            """Metadata only: save the kept records again (idempotent by generation_id); no Gemini call."""
+            if self.retry_thread is not None or not self.pending_history:
+                return
+            pending = dict(self.pending_history)
+            self.retry_history_btn.setEnabled(False)
+            self.status.setText("Saving: Retrying History...")
+
+            def save_all(items=pending):
+                return {"retried": {gid: record_history(root, {"history_record": rec})
+                                    for gid, (root, rec) in items.items()}}
+            self.retry_thread = QThread()
+            self.retry_worker = CallWorker(save_all)
+            self.retry_worker.moveToThread(self.retry_thread)
+            self.retry_thread.started.connect(self.retry_worker.run)
+            self.retry_worker.finished.connect(self.history_retried)
+            self.retry_thread.start()
+
+        def history_retried(self, result):
+            self.retry_thread.quit()
+            self.retry_thread.wait()
+            self.retry_thread = None
+            outcomes = result.get("retried", {})
+            failed = [o["message"] for o in outcomes.values() if not o["saved"]]
+            for gid, o in outcomes.items():
+                if o["saved"]:
+                    self.pending_history.pop(gid, None)
+            if not outcomes:
+                failed = result.get("errors") or ["Unexpected error."]
+            self.retry_history_btn.setVisible(bool(self.pending_history))
+            self.retry_history_btn.setEnabled(True)
+            self.status.setText(("History still not saved: " + " ".join(failed)) if failed else
+                                "History saved. The PDFs were already saved; nothing was sent to Gemini.")
+            if self.mode_stack.currentIndex() == 2:
+                self.load_history()
 
         def later(self, fn, *args):
             QTimer.singleShot(0, lambda: fn(*args))  # rebuild rows after the clicked widget's signal returns
@@ -1398,9 +1650,10 @@ def run_app() -> int:
             self.status.setText(f"Showing {p.name} in {workshops.relative(self.state, p.parent)}.")
 
         def closeEvent(self, event):
-            if self.pages_thread is not None:
-                self.pages_thread.quit()
-                self.pages_thread.wait()
+            for t in (self.pages_thread, self.hist_thread, self.retry_thread):
+                if t is not None:
+                    t.quit()
+                    t.wait()
             self.cancel_search()
             for thread, _ in list(self.search_jobs.values()):
                 thread.quit()
@@ -1781,14 +2034,14 @@ def run_app() -> int:
             elif result["status"] == "ok":
                 self.last_paths = result["paths"]
                 self.last_output_root = result["output_root"]
-                if len(result["paths"]) == 1:
-                    self.status.setText("Saved: " + result["paths"][0])
-                else:
-                    root = Path(result["output_root"])
-                    self.status.setText(f"Saved {len(result['paths'])} PDFs in {root}:\n" + "\n".join(
-                        Path(p).relative_to(root).as_posix() for p in result["paths"]))
-                if result.get("warnings"):
-                    self.status.setText(self.status.text() + "\n" + "\n".join(w["message"] for w in result["warnings"]))
+                h = result.get("history") or {}
+                if not h.get("saved") and h.get("record"):  # kept with its own workshop for a retry
+                    self.pending_history[h["record"]["generation_id"]] = (self.worker.request["workshop_root"],
+                                                                          h["record"])
+                self.retry_history_btn.setVisible(bool(self.pending_history))
+                self.status.setText(describe_saved(result))
+                if self.mode_stack.currentIndex() == 2:
+                    self.load_history()
             else:
                 self.status.setText(describe_error(result["error"]))
             if self.state:

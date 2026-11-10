@@ -2,7 +2,7 @@
 
 ## Purpose and status
 
-Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search) and P3-M2 (PDF page selection) are implemented** (see Implementation notes); P3-M3 through P3-M6 are proposed and pending implementation.
+Phase 3 plans four features for the existing Windows/PySide6 app. **P3-M1 (workshop search), P3-M2 (PDF page selection) and P3-M3 (persistent generation history) are implemented** (see Implementation notes); P3-M4 through P3-M6 are proposed and pending implementation.
 
 1. Search across the workshop.
 2. Choose PDF pages for generation.
@@ -84,7 +84,7 @@ Use plain values and functions for search, page parsing, record validation and p
 | --- | --- | --- | --- |
 | P3-M1 — Workshop search (**implemented**) | Existing workshop browser | Name search, relative-path results, selection and open/location actions | Search a disposable workshop with duplicate filenames in different subfolders. Select a result and open a PDF. Clear search and confirm the selection and captured destination behavior. A stale query cannot replace newer results. Links outside the workshop are skipped. |
 | P3-M2 — PDF page selection end to end (**implemented**; the compile-dependent pipeline tests were blocked by MiKTeX) | Existing generation pipeline; independent of P3-M1 | Per-PDF ranges through capture, preparation, prompts, transport and cleanup | On a PDF with distinct text on each page, select `1, 3-4`. Inspect one original-mode payload and one Efficient-mode source record and confirm only those pages are sent with correct original numbers. Out-of-range input fails before a client call. A selected scanned page's Process original fallback sends only the selected pages. A request without page settings still uses the full document. |
-| P3-M3 — Persistent generation history | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
+| P3-M3 — Persistent generation history (**implemented**; verified with stubbed Gemini/LaTeX, no real generation) | P3-M2 | Versioned successful-job records, History UI, open actions and metadata retry | Generate a small output and reopen the app. Its task, settings, input page choices and final paths appear. Simulate a metadata-save failure after publication and verify the UI reports saved PDFs; retry saves one record without regenerating. A failed or cancelled generation creates no successful entry. |
 | P3-M4 — Reuse history and reconcile paths | P3-M3 | Restore-settings action, source-change checks and organizer integration | Reuse a saved request and confirm its page ranges and destination. Move an output folder through Organize and open the remapped history entry. Delete an input and verify reuse identifies it for correction. Corrupt metadata shows a warning and preserves the original record file. |
 | P3-M5 — Persistent study progress | P3-M4 | Daily-plan completion controls and totals | Open a two-day plan, mark two of six items complete, restart and see `2/6`. Generate another plan and confirm independent completion. A missing output is visibly unavailable. A failed save returns the checkbox to its saved state. |
 | P3-M6 — Integrated demo and handoff | P3-M1 through P3-M5 | Working packaged flow and current implementation documentation | Run the walkthrough below in the Windows build. Verify search and page helpers are included, PDF opening works, history/progress survive restart, and one existing All pages generation still succeeds. Update affected sections of architecture, workflow and README with observed behavior. |
@@ -104,7 +104,7 @@ Use the repository's cheapest meaningful check at each milestone. Reuse existing
 
 ## Implementation notes
 
-Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M3 through P3-M6 are pending.
+Add verified outcomes, relevant checks and remaining limitations as each milestone is implemented. P3-M4 through P3-M6 are pending.
 
 ### P3-M1 — Workshop search (implemented 2026-11-09)
 
@@ -154,3 +154,46 @@ Add verified outcomes, relevant checks and remaining limitations as each milesto
   - A Pages field is committed with Enter or Tab (on focus loss), not while typing.
   - Page counts are cached per file modification time for the session.
   - The UI recounts PDFs it has not seen. On this PC the first `import pypdf` on a worker thread is held up when the GIL isn't released. The real app's `exec()` loop releases it, and the offscreen check passed once the harness did the same.
+
+### P3-M3 — Persistent generation history (implemented 2026-11-09)
+
+- **Built:**
+  - `history.py` (Qt-free): `build_record`, `record_problem`, `load`, `save_record`, `resolve`, `view`. The version-1 record schema, the storage location, partitioning and atomic writes are in `architecture.md`.
+  - `generation.generate`: allocates `generation_id` (or takes `request["generation_id"]`). Right after publication it adds `history_record`, built from the source and rendered-document metadata while that still exists, before the temp folders are removed.
+  - The UI `Worker` saves the record after a successful job, still off the UI thread. `generate` itself never writes history, so `--summarize` and injected-dependency runs are unchanged.
+  - The **History** mode has rows, outputs, **Open document**, **Open output folder** and **Reload**. **Retry saving history** appears with `pending_history`.
+- **Saved for P3-M4/M5:** each record holds the validated task parameters, Efficient, the captured destination, every input's relative path, original-source fingerprint, size, MIME type, mode, page count and normalized page choice, and each output's `document_id`, role, day and final relative path. P3-M4 can remap these paths with confirmed moves and check fingerprints. P3-M5 can key progress on `generation_id` + `document_id`.
+- **Decisions:**
+  - History is stored per workshop, in a file named by a hash of the normcased canonical root, so a workshop's name never appears in a file name.
+  - Single-file outputs record `day: null`, because validation normalizes day 0 that way.
+  - Loading never writes. An unusable file is moved aside only when the next save happens, so the original bytes are always kept.
+  - Pending retries live for the current app session only (as specified). They are not persisted across restarts.
+- **Verified:** this ran in the same throwaway venv (Python 3.12, PySide6 6.12.0, pypdf 7.0.0). Gemini and lualatex were stubbed, and publication was real.
+  - **`python -m unittest tests.test_history -v`, 7 tests passing:**
+    - two Summary runs into `Revision` record `Revision/summary.pdf` and `Revision/summary (2).pdf`;
+    - each record has the right task, `Simple` style, Efficient off, destination and output root `Revision`, the `[1, 3, 4]` page choice with `page_count` 5, and the original PDF's own sha256;
+    - the stored file contains no LaTeX, source text, raw response or payload data;
+    - a fresh `load` lists the two newest first;
+    - a two-day plan records six outputs with role and day under `Revision/Week 5 (2)/Day 01/…`;
+    - two workshops get separate files and histories, and a workshop with no file has an empty history;
+    - a forced `PermissionError` on save keeps `status: ok`, and the status text starts `Saved:` and says History was not updated. Two retries then leave exactly one record with the same id, with no additional client calls;
+    - a bad response, a failed publish and a cancelled scan decision produce no record and no file;
+    - bad JSON and `version: 99` produce a warning naming the file and leave it unchanged. The next save keeps the original bytes in `*.unreadable-*.json` and writes a fresh file;
+    - one invalid record is hidden with a count;
+    - `resolve` rejects `..`, an absolute path, backslashes, an empty path and a path through a junction, and reports a deleted output as `missing` / `(1 unavailable)`.
+  - **Offscreen Qt check, 11/11:**
+    - History loads off-thread with the newest entry first, showing `pages 1, 3-4`, `Standard style · Efficient off · Save to: Revision` and `1 PDF in Revision`;
+    - the older entry's deleted output is greyed as unavailable, and Open document is off for it;
+    - Open document launches Chrome on `Revision/summary (2).pdf`, and Open output folder opens `Revision`;
+    - deleting the file before clicking gives a message with no launch, and the view reloads to mark it;
+    - a load for workshop A still running when workshop B opens never shows A's entries;
+    - the real `job_finished` slot, given a failed save, reports the saved PDF and shows Retry. After opening another workshop, Retry saves the entry once to its own workshop with no Gemini call, and the button hides.
+
+    The script was a one-off check and is not in the repository. The P3-M1/M2 offscreen check still passes 18/18, and the 64 existing non-LaTeX tests still pass.
+- **Not verified (environment):**
+  - **Real Generate:** no real Gemini plus lualatex generation ran. The same MiKTeX `lualatex.fmt` rebuild failure recorded under P3-M2 still blocks compiling on this PC, so publication was exercised with stubbed rendering.
+  - **Restarting the app:** this was simulated by a fresh `load()` from disk and a new window. The packaged exe was not run.
+- **Limitations:**
+  - Opening a different workshop's History needs that workshop to be open.
+  - There is no delete or clear for History entries.
+  - Organizer moves do not yet remap stored paths; that is P3-M4. A moved output simply shows as unavailable.

@@ -5,6 +5,10 @@
 
 request = {"workshop_root", "destination", "selected_paths", "task_id", "parameters", "efficient",
            "page_selections"?: {pdf path: None | [original page numbers]}}   (missing = All pages)
+A successful result also carries "generation_id" (request["generation_id"] if given, else new)
+and "history_record" (history.build_record, built right after publication from the pipeline's own
+source/document metadata; None plus "history_error" if it could not be built). Saving it is the
+caller's job (the UI worker), so the CLI and injected-dependency runs never write history.
 Selected-page PDF subsets live in one job temp folder from preparation through the last retry and
 are deleted on success, failure and cancellation.
 Components are passed in through `deps` so each boundary can be swapped for a stub.
@@ -24,7 +28,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import AppError, gemini_client, inputs, outputs, rendering, tasks, validation, workshops
+from . import AppError, gemini_client, history, inputs, outputs, rendering, tasks, validation, workshops
 
 
 class RequestError(AppError):
@@ -89,6 +93,7 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
 
 def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
     d = {**DEFAULT_DEPS, **(deps or {})}
+    generation_id = request.get("generation_id") or history.new_generation_id()
     timings = {}
 
     def progress(stage, message):
@@ -216,9 +221,16 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
             rendered = [records[x["document_id"]] for x in bundle["documents"]]
             progress("publishing", f"Saving {len(rendered)} PDF{'s' if len(rendered) > 1 else ''}...")
             published = timed("publish_s", d["publish"], rendered, task, checked["destination"], checked["root"])
-        return {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,
-                "documents": [{"document_id": r["document_id"], "page_count": r.get("page_count"),
-                               "render_s": r.get("seconds")} for r in rendered]}
+        result = {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,
+                  "generation_id": generation_id, "history_record": None,
+                  "documents": [{"document_id": r["document_id"], "page_count": r.get("page_count"),
+                                 "render_s": r.get("seconds")} for r in rendered]}
+        try:  # the PDFs are published: nothing here may turn success into an error
+            result["history_record"] = history.build_record(generation_id, checked["root"], checked["destination"],
+                                                            task, efficient, sources, rendered, published)
+        except Exception as e:
+            result["history_error"] = f"The history entry could not be prepared ({type(e).__name__})."
+        return result
     except AppError as e:
         return {"status": "error", "error": e.envelope(), "timings": timings}
     except OSError as e:

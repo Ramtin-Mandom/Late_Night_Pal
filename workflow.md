@@ -1,6 +1,6 @@
 # Application workflow
 
-The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search) and P3-M2 (PDF page selection) are implemented; generation history and study progress are pending.
+The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT_MAP_AND_MILESTONES.md](PHASE_3_PROJECT_MAP_AND_MILESTONES.md). P3-M1 (workshop name search), P3-M2 (PDF page selection) and P3-M3 (generation history) are implemented; reusing history settings and study progress are pending.
 
 Current state: M7. The same flow runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
@@ -75,7 +75,8 @@ A `Worker` runs `generation.generate(request)` on a `QThread`; Generate is disab
 7. **Renderer** `render_bundle()` → each body is wrapped in the Python preamble (allowlisted packages, title, subtitle, read guard) and compiled by lualatex in a restricted process in a temp folder (no key in its environment; on Windows a job object). Every document is compiled even if one fails.
    Daily PDFs' subtitles name that day's sources from the allocation (`Day 01 · From Lectures/topic.pdf · <date>`).
 8. **Publisher** `publish()` → builds `.lnp-staging-*` in `Revision/`, then renames it to `Daily Study Plan/` (or `Daily Study Plan (2)/` if that exists) with `Day 01/` and `Day 02/`. Observed: under 0.1 s.
-9. **Desktop UI** shows `Saved 6 PDFs in …\Daily Study Plan:` with the relative list. PDFs stay in the output folder without opening. **Open document** opens the first PDF on request; **Open output folder** opens `Daily Study Plan/`.
+9. **Desktop UI** shows `Saved 6 PDFs in …\Daily Study Plan:` with the relative list. PDFs stay in the output folder without opening. **Open document** opens the first PDF on request; **Open output folder** opens `Daily Study Plan/`. The worker then adds the result to History (`record_history()`, after publication only) and the status ends with `Added to History.`
+10. **History** (third mode button) lists this workshop's successful generations newest first: `Make daily study plan · 2026-11-09 17:48`, the inputs with any `(pages 1, 3-4)`, style/days, Efficient, Save to, and `6 PDFs in Revision/Daily Study Plan`. Pick an entry to see its outputs (`Day 01/notes.pdf · notes, day 1`); **Open document** / **Open output folder** open the recorded final paths after rechecking them. A moved or deleted output shows `(unavailable: moved or deleted)` and can't be opened. Another workshop's history never appears here. If History can't be saved (for example the file is locked), the status still lists the saved PDFs, says History was not updated and shows **Retry saving history**, which saves the same entry once without contacting Gemini. A failed or cancelled job adds nothing.
 
 Other layouts:
 - **Make schedule** writes `Study Schedule/{schedule,file-guide,checklist}.pdf`. Validation requires a `Day N` heading for every day and a file guide that names every source. Observed: Gemini 290 s, render 7.9 s.
