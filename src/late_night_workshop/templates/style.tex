@@ -1,61 +1,92 @@
 % Late Night Pal look, shared by document.tex and cheat-sheet.tex (Python-owned; loaded before the guard).
-% The generated body may only use the environments and macros below; tcolorbox commands themselves are
-% rejected by validation.latex_problems, so a body can't pass its own box options.
+% A study-guide style: sans headings, numbered section bars, few flat callouts with inline labels,
+% unboxed worked examples, boxed final answers. The generated body may only use the environments and
+% macros below; tcolorbox commands themselves are rejected by validation.latex_problems.
 \usepackage[skins,breakable]{tcolorbox}
 \usepackage{titlesec}
-\definecolor{lnpink}{HTML}{1E293B}
-\definecolor{lnpblue}{HTML}{2563EB}
-\definecolor{lnpindigo}{HTML}{4338CA}
-\definecolor{lnpteal}{HTML}{0F766E}
-\definecolor{lnpgreen}{HTML}{15803D}
-\definecolor{lnporange}{HTML}{C2410C}
-\definecolor{lnpred}{HTML}{B91C1C}
-\definecolor{lnppurple}{HTML}{7E22CE}
-\definecolor{lnpgray}{HTML}{64748B}
-\definecolor{lnpyellow}{HTML}{FEF3C7}
+\usepackage{colortbl}
+\newfontfamily\lnpsans{Segoe UI}[Scale=0.92, BoldFont={Segoe UI Semibold}, ItalicFont={Segoe UI Italic}, BoldItalicFont={Segoe UI Semibold Italic}]
+\definecolor{lnpink}{HTML}{1F2328}
+\definecolor{lnpbar}{HTML}{165A7C}
+\definecolor{lnpblue}{HTML}{1F6F96}
+\definecolor{lnpindigo}{HTML}{165A7C}
+\definecolor{lnpteal}{HTML}{1B6E6A}
+\definecolor{lnpgreen}{HTML}{17703F}
+\definecolor{lnporange}{HTML}{8A4A00}
+\definecolor{lnpred}{HTML}{A12D2D}
+\definecolor{lnppurple}{HTML}{643A85}
+\definecolor{lnpgray}{HTML}{5F6670}
+\definecolor{lnpyellow}{HTML}{FFF1C9}
+\definecolor{lnprulebg}{HTML}{EBF4FA}
+\definecolor{lnpwatchbg}{HTML}{FFF1DC}
+\definecolor{lnpturnbg}{HTML}{EAF6EF}
+\definecolor{lnpnotebg}{HTML}{F2F3F5}
+\definecolor{lnpthmbg}{HTML}{F3EEF8}
+\definecolor{lnptablehead}{HTML}{EAF3F9}
 \AtBeginDocument{\color{lnpink}}
+\raggedbottom
 
-% Headings
-\titleformat{\section}{\Large\bfseries\color{lnpindigo}}{\thesection}{0.6em}{}[\vspace{-2pt}{\color{lnpindigo!25}\titlerule[1pt]}]
-\titleformat{name=\section,numberless}{\Large\bfseries\color{lnpindigo}}{}{0pt}{}[\vspace{-2pt}{\color{lnpindigo!25}\titlerule[1pt]}]
-\titleformat{\subsection}{\large\bfseries\color{lnpteal}}{\thesubsection}{0.5em}{}
-\titleformat{name=\subsection,numberless}{\large\bfseries\color{lnpteal}}{}{0pt}{}
-\titleformat{\subsubsection}{\normalsize\bfseries\color{lnpblue}}{\thesubsubsection}{0.5em}{}
-\titleformat{name=\subsubsection,numberless}{\normalsize\bfseries\color{lnpblue}}{}{0pt}{}
-\titleformat{\paragraph}[runin]{\normalsize\bfseries\color{lnpblue}}{}{0pt}{}
+% Headings: numbered sections are solid bars; subsections are purple sans lines.
+\newcommand{\lnpbar}[3]{{\setlength{\fboxsep}{5pt}\colorbox{#1}{\parbox{\dimexpr\linewidth-2\fboxsep\relax}{\strut#2#3}}}}
+\titleformat{\section}{\lnpsans\bfseries\large\color{white}}{}{0pt}{\lnpbar{lnpbar}{\thesection\hspace{1.3em}}}
+\titleformat{name=\section,numberless}{\lnpsans\bfseries\large\color{white}}{}{0pt}{\lnpbar{lnpbar}{}}
+\titlespacing*{\section}{0pt}{16pt}{8pt}
+\titleformat{\subsection}{\lnpsans\bfseries\normalsize\color{lnppurple}}{}{0pt}{}
+\titleformat{name=\subsection,numberless}{\lnpsans\bfseries\normalsize\color{lnppurple}}{}{0pt}{}
+\titlespacing*{\subsection}{0pt}{11pt}{3pt}
+\titleformat{\subsubsection}{\lnpsans\bfseries\small\color{lnpblue}}{}{0pt}{}
+\titleformat{name=\subsubsection,numberless}{\lnpsans\bfseries\small\color{lnpblue}}{}{0pt}{}
+\titleformat{\paragraph}[runin]{\lnpsans\bfseries\small\color{lnppurple}}{}{0pt}{}
+% Purple bar for practice sets, green bar for answers: \practicesection{Practice · Multiple choice}
+\newcommand{\lnpbarheading}[2]{\par\addvspace{16pt}\noindent{\lnpsans\bfseries\large\color{white}\lnpbar{#1}{}{#2}}\par\nopagebreak\vspace{6pt}}
+\newcommand{\practicesection}[1]{\lnpbarheading{lnppurple}{#1}}
+\newcommand{\answersection}[1]{\lnpbarheading{lnpgreen}{#1}}
 
-% Boxes: \begin{definition}[Ideal] ... \end{definition}; the title is optional.
+% Flat callouts with an inline label: \begin{rulebox}[optional name] ... \end{rulebox}
 % lnpspace / lnpbreak are restyled by cheat-sheet.tex for tight, unbreakable boxes in columns.
+\newcommand{\lnplabel}[3]{{\lnpsans\bfseries\color{#1}#2\if\relax\detokenize{#3}\relax\else\ \textperiodcentered\ #3\fi}\hspace{0.5em}}
 \tcbset{
-  lnpspace/.style={left=7pt, right=7pt, top=4pt, bottom=4pt, before skip=9pt, after skip=9pt,
-    toptitle=1.5pt, bottomtitle=1.5pt},
+  lnpspace/.style={left=7pt, right=7pt, top=5pt, bottom=5pt, before skip=9pt, after skip=9pt},
   lnpbreak/.style={breakable},
-  lnpbox/.style={enhanced, arc=2.5pt, boxrule=0pt, leftrule=3.2pt, titlerule=0pt,
-    colback=#1!6, colframe=#1, colbacktitle=#1!16, coltitle=#1!75!black, fonttitle=\bfseries,
-    lnpbreak, lnpspace}}
-\newcommand{\lnptitle}[2]{#1\if\relax\detokenize{#2}\relax\else: #2\fi}
-\NewTColorBox{definition}{ O{} }{lnpbox=lnpblue, title={\lnptitle{Definition}{#1}}}
-\NewTColorBox{theorem}{ O{} }{lnpbox=lnppurple, title={\lnptitle{Theorem}{#1}}}
-\NewTColorBox{lemma}{ O{} }{lnpbox=lnppurple, title={\lnptitle{Lemma}{#1}}}
-\NewTColorBox{formula}{ O{} }{lnpbox=lnpteal, title={\lnptitle{Formula}{#1}}}
-\NewTColorBox{example}{ O{} }{lnpbox=lnpgreen, title={\lnptitle{Example}{#1}}}
-\NewTColorBox{keyidea}{ O{} }{lnpbox=lnporange, title={\lnptitle{Key idea}{#1}}}
-\NewTColorBox{pitfall}{ O{} }{lnpbox=lnpred, title={\lnptitle{Common mistake}{#1}}}
-\NewTColorBox{note}{ O{} }{lnpbox=lnpgray, title={\lnptitle{Note}{#1}}}
-\NewTColorBox{summarybox}{ O{} }{lnpbox=lnpindigo, title={\lnptitle{In short}{#1}}}
-\NewTColorBox{question}{ m }{lnpbox=lnpblue, title={#1}}
-\NewTColorBox{answer}{ m }{lnpbox=lnpgreen, title={#1}}
+  lnpflat/.style={enhanced, frame hidden, arc=0pt, boxrule=0pt, colback=#1, lnpbreak, lnpspace}}
+\NewTColorBox{rulebox}{ O{} }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{Rule}{#1}}}
+\NewTColorBox{definition}{ O{} }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{Definition}{#1}}}
+\NewTColorBox{formula}{ O{} }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{Formula}{#1}}}
+\NewTColorBox{theorem}{ O{} }{lnpflat=lnpthmbg, before upper={\lnplabel{lnppurple}{Theorem}{#1}}}
+\NewTColorBox{lemma}{ O{} }{lnpflat=lnpthmbg, before upper={\lnplabel{lnppurple}{Lemma}{#1}}}
+\NewTColorBox{keyidea}{ O{} }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{Key idea}{#1}}}
+\NewTColorBox{pitfall}{ O{} }{lnpflat=lnpwatchbg, before upper={\lnplabel{lnporange}{Watch for this}{#1}}}
+\NewTColorBox{note}{ O{} }{lnpflat=lnpnotebg, before upper={\lnplabel{lnpgray}{Note}{#1}}}
+\NewTColorBox{summarybox}{ O{} }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{In short}{#1}}}
+\NewTColorBox{question}{ m }{lnpflat=lnprulebg, before upper={\lnplabel{lnpblue}{#1}{}}}
+\NewTColorBox{answer}{ m }{lnpflat=lnpturnbg, before upper={\lnplabel{lnpgreen}{#1}{}}}
+% Your turn: the exercise, then \solution and its short answer on the next line.
+\newcommand{\lnpsolution}{\par\smallskip\lnplabel{lnpgreen}{Check}{}\small}
+\NewTColorBox{yourturn}{ O{} }{lnpflat=lnpturnbg, before upper={\let\solution\lnpsolution\lnplabel{lnpgreen}{Your turn}{#1}}}
 \NewTColorBox{proof}{ O{} }{enhanced, lnpbreak, lnpspace, frame hidden, colback=white, top=1pt, bottom=1pt,
-  borderline west={1.2pt}{0pt}{lnpgray!60}, before upper={\textit{\textbf{\textcolor{lnpgray}{\lnptitle{Proof}{#1}.}}}\ },
+  borderline west={1.2pt}{0pt}{lnpgray!50}, before upper={\textit{\textbf{\textcolor{lnpgray}{Proof\if\relax\detokenize{#1}\relax\else\ (#1)\fi.}}}\ },
   after upper={\hfill\textcolor{lnpgray}{$\blacksquare$}}}
+% Worked examples are not boxed: a purple heading line, then ordinary text and display math.
+\NewDocumentEnvironment{example}{ O{} }
+  {\par\addvspace{8pt}\noindent{\lnpsans\bfseries\color{lnppurple}Example\if\relax\detokenize{#1}\relax\else\ \textperiodcentered\ #1\fi}\par\nopagebreak\smallskip}
+  {\par\addvspace{6pt}}
 
 % Inline helpers
-\newcommand{\keyterm}[1]{\textbf{\textcolor{lnpindigo}{#1}}}
+\newcommand{\keyterm}[1]{\textbf{#1}}
 \newcommand{\highlight}[1]{\colorbox{lnpyellow}{\strut #1}}
+\newcommand{\boxans}[1]{{\setlength{\fboxsep}{3pt}\fcolorbox{lnpteal}{white}{\(\displaystyle\color{lnpteal}#1\)}}}
 \newcommand{\src}[2]{{\footnotesize\textcolor{lnpgray}{[\detokenize{#1}\if\relax\detokenize{#2}\relax\else, p.~#2\fi]}}}
+\newcommand{\kicker}[1]{{\lnpsans\bfseries\small\color{lnpblue}\MakeUppercase{#1}}}
+% Multiple-choice options in one row: \choices{$\sqrt{36}$}{$0.\overline{18}$}{...}{...}
+\newcommand{\choices}[4]{\par\nopagebreak\noindent\begin{tabular}{@{}p{0.235\linewidth}p{0.235\linewidth}p{0.235\linewidth}p{0.235\linewidth}@{}}
+  \textbf{A}~#1 & \textbf{B}~#2 & \textbf{C}~#3 & \textbf{D}~#4\end{tabular}\par\medskip}
+% Answer-key letter: \ans{C} The reason...
+\newcommand{\ans}[1]{\textcolor{lnpgreen}{\textbf{#1.}}}
+% Space for written work in a practice test: \workspace (about 5 cm)
+\newcommand{\workspace}{\par\vspace{5cm}}
+% Tables: \headrow at the start of the header row shades it.
+\newcommand{\headrow}{\rowcolor{lnptablehead}}
 
 % Checklists: \begin{checklist} \item ... \end{checklist}
 \newlist{checklist}{itemize}{2}
-\setlist[checklist]{label=\textcolor{lnpteal}{$\square$}, leftmargin=1.6em}
-\setlist[itemize,1]{label=\textcolor{lnpindigo}{\textbullet}}
-\setlist[enumerate,1]{label=\textcolor{lnpindigo}{\bfseries\arabic*.}}
+\setlist[checklist]{label=\textcolor{lnpblue}{$\square$}, leftmargin=1.6em}

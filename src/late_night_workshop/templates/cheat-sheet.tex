@@ -7,13 +7,13 @@
 <<PACKAGES>>
 \setlist{nosep, leftmargin=1.1em}
 <<STYLE>>
-% Tight boxes that stay whole inside columns.
-\tcbset{lnpspace/.style={left=3pt, right=3pt, top=1.5pt, bottom=1.5pt, before skip=3pt, after skip=3pt,
-  toptitle=0.5pt, bottomtitle=0.5pt}, lnpbreak/.style={}}
-\titlespacing*{\section}{0pt}{4pt}{2pt}
+% Tight callouts that stay whole inside columns, and slim section bars.
+\tcbset{lnpspace/.style={left=3pt, right=3pt, top=2pt, bottom=2pt, before skip=3pt, after skip=3pt},
+  lnpbreak/.style={}}
+\titleformat{\section}{\lnpsans\bfseries\small\color{white}}{}{0pt}{\lnpbar{lnpbar}{}}
+\titleformat{name=\section,numberless}{\lnpsans\bfseries\small\color{white}}{}{0pt}{\lnpbar{lnpbar}{}}
+\titlespacing*{\section}{0pt}{5pt}{3pt}
 \titlespacing*{\subsection}{0pt}{3pt}{1pt}
-\titleformat{name=\section,numberless}{\normalsize\bfseries\color{lnpindigo}}{}{0pt}{}
-\titleformat{name=\subsection,numberless}{\small\bfseries\color{lnpteal}}{}{0pt}{}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{2pt}
 \setlength{\columnsep}{0.6cm}
@@ -21,9 +21,7 @@
 % Everything after this line is the generated latex_code: the guard runs first.
 \directlua{dofile("lnp-guard.lua")}
 \begin{document}
-\begin{tcolorbox}[enhanced, colback=lnpindigo, colframe=lnpindigo, arc=2pt, boxrule=0pt,
-  left=6pt, right=6pt, top=3pt, bottom=3pt, before skip=0pt, after skip=4pt]
-{\color{white}\large\bfseries <<TITLE>>}\hfill{\color{white!80!lnpindigo}\scriptsize <<SUBTITLE>>}
-\end{tcolorbox}
+{\lnpsans\bfseries\large <<TITLE>>}\hfill\kicker{<<SUBTITLE>>}\par\vspace{1pt}
+{\color{lnpbar}\rule{\linewidth}{0.8pt}}\par\vspace{3pt}
 <<BODY>>
 \end{document}

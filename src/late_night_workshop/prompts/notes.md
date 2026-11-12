@@ -1,16 +1,15 @@
-Write one document with role notes: complete, beautifully structured lecture notes from which a student can learn the attached material without opening the originals.
+Write one document with role notes: a complete study guide from which a student can learn the attached material and work its problems without opening the originals.
 
-Open with \begin{summarybox}[What these notes cover] listing the main topics in two to five bullets, then follow the conceptual progression of the sources. Put prerequisites before the ideas that use them. Give each major topic its own \section* and each part a \subsection*. When combining files, say which lecture a section comes from in its first sentence and cite its pages with \src.
+Start with a short paragraph, without a heading, saying what the guide covers and how to use it (for example: give exact answers; each section ends with a quick check). Then follow the conceptual progression of the sources, prerequisites first, with one numbered \section per major topic, named for the skill or idea. When combining files, say which lecture a section comes from in its opening paragraph.
 
-Be thorough. Cover every definition, theorem, method, worked example and remark in the sources; leave nothing out because it seems minor. For a lecture-length source, two to three pages of notes is typical. Give the important explanation room to breathe.
+Be thorough. Cover every definition, theorem, method, worked example and remark in the sources; leave nothing out because it seems minor. A section is usually half a page to a page and a half.
 
-Teach each major idea in this rhythm, using the parts that suit it:
-1. Motivation in prose: what problem the idea addresses and the intuition behind it. A keyidea box can hold the one-sentence picture.
-2. The precise statement in a definition, theorem, lemma or formula box, including every hypothesis and condition that changes when it applies.
-3. Why it is true: a proof box for proofs taught in the lecture (identify a sketch as a sketch), or a derivation with the reason for each non-obvious step.
-4. A worked example box. Prefer the source's own examples and include all of them. For a substantial method without one, add an example marked (illustrative) in its title. Show enough of the process for the student to repeat it.
-5. A pitfall box when there is a typical error, a tempting false converse, or a counterexample that marks the boundary of a result.
+Build each section in this order, using the parts that suit it:
+1. A short opening paragraph: a question or concrete case that shows why the idea is needed, then the intuition in plain words.
+2. The precise statement: a rulebox for a procedure, a definition box for a definition, a theorem box for a result, with every hypothesis and condition. A compact table when several laws, cases or objects belong side by side.
+3. Why it is true: a proof box for proofs taught in the lecture (say when it is a sketch), or a derivation with a reason for each non-obvious step.
+4. Worked examples, one per technique or case, as example environments: the source's own examples, all of them, plus an illustrative one for a method without an example. Show every step on display lines, explain the move in a sentence, colour the part that changes, and box the final answer. Use \subsection* headings to separate cases or methods within a section.
+5. A pitfall box for a typical error, a tempting false converse, or the counterexample that marks the boundary of a result, shown with a concrete case.
+6. End every section with a yourturn box: one or two short exercises on that section, with \solution and a brief answer.
 
-Add a comparison table when the sources contrast several cases (for example ring types, tests, or reaction conditions), and a small TikZ diagram when a structure or relationship is easier to see than to read. For an experiment, connect the question, observation, and conclusion.
-
-End with \section*{Key takeaways} containing a summarybox of four to eight bullets: the results and techniques a student must know for an exam.
+Add a small TikZ diagram when a structure or relationship is easier to see than to read. For an experiment, connect the question, observation, and conclusion. Finish with an unnumbered \section*{Key takeaways}: a short list of the results and techniques a student must know for an exam.

@@ -1,6 +1,6 @@
 # Late Night Pal
 
-A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Codex (default) or the Gemini API. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate starts with one request to the selected provider, and every PDF is compiled locally with LaTeX into a colourful handout: a title banner, coloured headings, Definition / Theorem / Example / Key idea / Common mistake boxes and page citations such as [Lec/lec18.pdf, p. 3]. Nothing existing is ever overwritten.
+A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Codex (default) or the Gemini API. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate starts with one request to the selected provider, and every PDF is compiled locally with LaTeX into a study guide in the style of a tutor's midterm review: numbered section bars, worked examples with boxed answers, a few colour-coded callouts (Rule, Definition, Theorem, Watch for this), a Your turn / Check exercise at the end of each section, and light page citations such as [Lec/lec18.pdf, p. 3]. Sample questions come as a practice test (multiple choice and written response) with an answer key. Nothing existing is ever overwritten.
 
 | Output type | Task | Parameters | Result in the current folder |
 | --- | --- | --- | --- |

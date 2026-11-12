@@ -1,9 +1,7 @@
-Write one combined document with role summary: a vivid, quick-to-read overview of the attached material.
+Write one combined document with role summary: a short, readable review of the attached material, roughly a third of the length of full notes.
 
-Open with \begin{summarybox}[The big picture] holding two to four sentences on the subject and the main conclusion, method, or relationship the student should remember.
+Start with a short paragraph, without a heading, giving the subject and the main conclusion, method, or relationship the student should remember. Then give each main topic a numbered \section, covering the main contribution of every source and naming its file in the opening sentence. Merge duplicate explanations. If two sources connect, say how: for instance, which lecture idea a lab observation illustrates, preserving the conditions of that observation.
 
-Then give each main topic a \section*. Cover the main contribution of every source, naming the file in the section's first sentence and citing pages with \src. Merge duplicate explanations. If two sources connect, say how: for instance, which lecture idea a lab observation illustrates, preserving the conditions of that observation.
+In each section write a few plain sentences on how the ideas fit together, then state the central facts precisely: the key definitions and results in definition, theorem, formula or rulebox callouts, with the condition that makes each true. Use a booktabs table (header row shaded with \headrow) when several cases or concepts compare side by side, and a compact list for steps or properties. Add one short example only when it explains a main idea faster than another paragraph, and a pitfall box for the most common confusion.
 
-In each section, write a few explanatory sentences on how the ideas relate, then put the central facts in boxes: the key definitions in definition boxes, the main results in theorem or formula boxes with the condition that makes them true, and the core intuition in a keyidea box. Use a compact list for steps or properties, and a booktabs table when several cases or concepts are compared side by side. Include a short example box only when it explains a main idea more economically than another paragraph, and a pitfall box for the most common confusion.
-
-Omit long derivations and repetitive detail; a summary is roughly a third of the length of full notes. End with \section*{Remember} and a summarybox of three to six bullets.
+Omit long derivations, proofs and repetitive detail. Finish with an unnumbered \section*{Remember}: three to six short bullets.
