@@ -7,7 +7,7 @@ physical page numbers, e.g. [1, 3, 4]. That is what requests carry and what hist
     validate(choice, page_count, filename)   -> [1, 3, 4] | None (bounds; a list naming every page -> None)
     inspect(path) -> page count               (raises PageError for encrypted / unreadable PDFs)
     write_subset(path, pages, out_path)      -> {path, fingerprint, size, page_map}
-    write_page_images(path, pages, out_dir, stem) -> [{page, path}]  (scans as JPEGs, for Codex)
+    write_page_images(path, pages, out_dir, stem) -> [{page, path}]  (rendered pages as JPEGs, for Codex)
     format_pages([1, 3, 4]) -> "1, 3-4";  describe(choice, count) -> "Pages 1, 3-4 (3 of 12)"
 """
 
@@ -123,47 +123,46 @@ def write_subset(path, pages, out_path, data: bytes | None = None) -> dict:
             "size": len(payload), "page_map": list(pages)}
 
 
-SCAN_MAX_SIDE = 2000   # px; larger scans are downscaled before they are attached
-SCAN_MIN_SIDE = 64     # px; smaller embedded images (logos, bullets) are not page scans
+PAGE_IMAGE_SIDE = 2000  # px along the page's longer side
 
 
 def write_page_images(path, pages, out_dir, stem: str, data: bytes | None = None) -> list[dict]:
-    """The scanned images embedded in `pages` (original numbers), saved as JPEGs for an
-    image-capable provider: [{page, path}] in page order. A page without a usable image raises
-    PageError("scan_no_image"), because it has neither text nor a scan to send."""
-    from PIL import Image
+    """Render `pages` (original numbers) as a PDF viewer would and save them as JPEGs for an
+    image-capable provider: [{page, path}] in page order. This covers scans (a stored photo) and
+    handwriting or drawings exported as vector strokes alike. Uses Qt's PDF module (part of
+    PySide6); no QApplication is needed, so it runs on the generation worker thread.
+    A page Qt cannot render raises PageError("page_render_failed")."""
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QSize, Qt
+    from PySide6.QtGui import QImage, QPainter
+    from PySide6.QtPdf import QPdfDocument
     path = Path(path)
-    reader = _reader(data if data is not None else path.read_bytes(), path.name)
+    buffer = QBuffer()
+    buffer.setData(QByteArray(data if data is not None else path.read_bytes()))
+    buffer.open(QIODevice.ReadOnly)
+    doc = QPdfDocument()
+    doc.load(buffer)
+    if doc.status() != QPdfDocument.Status.Ready:
+        raise PageError("page_render_failed", f"{path.name} could not be drawn as images. Select Gemini API in "
+                        "Settings to send the original PDF.")
     images = []
     for n in pages:
-        found = 0
-        try:
-            embedded = list(reader.pages[n - 1].images)
-        except Exception:
-            embedded = []
-        for item in embedded:
-            try:
-                img = item.image
-                img.load()
-            except Exception:
-                continue
-            if min(img.size) < SCAN_MIN_SIDE:
-                continue
-            if img.mode in ("RGBA", "LA", "P"):
-                img = img.convert("RGBA")
-                flat = Image.new("RGB", img.size, "white")
-                flat.paste(img, mask=img.getchannel("A"))
-                img = flat
-            elif img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            img.thumbnail((SCAN_MAX_SIDE, SCAN_MAX_SIDE))
-            found += 1
-            out = Path(out_dir) / f"{stem}-p{n:04d}-{found}.jpg"
-            img.save(out, "JPEG", quality=85)
-            images.append({"page": n, "path": str(out)})
-        if not found:
-            raise PageError("scan_no_image", f"{path.name}: page {n} has no extractable text and no scanned "
-                            "image to send. Select Gemini API in Settings to send the original PDF, or use an OCR copy.")
+        size = doc.pagePointSize(n - 1)
+        scale = PAGE_IMAGE_SIDE / max(size.width(), size.height(), 1)
+        target = QSize(max(1, round(size.width() * scale)), max(1, round(size.height() * scale)))
+        drawn = doc.render(n - 1, target)
+        if drawn.isNull():
+            raise PageError("page_render_failed", f"{path.name}: page {n} could not be drawn as an image. Select "
+                            "Gemini API in Settings to send the original PDF.")
+        page = QImage(drawn.size(), QImage.Format_RGB32)
+        page.fill(Qt.white)  # transparent areas would turn black in a JPEG
+        painter = QPainter(page)
+        painter.drawImage(0, 0, drawn)
+        painter.end()
+        out = Path(out_dir) / f"{stem}-p{n:04d}.jpg"
+        if not page.save(str(out), "JPG", 85):
+            raise PageError("page_render_failed", f"{path.name}: page {n} could not be saved as an image.")
+        images.append({"page": n, "path": str(out)})
+    doc.close()
     return images
 
 

@@ -11,10 +11,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
-sys.path.insert(0, str(ROOT / "tests"))
+
 
 from late_night_workshop import codex_client, inputs  # noqa: E402
-from test_pdf_pages import make_pdf  # noqa: E402
 
 SCAN = ROOT / "demo" / "Biology Demo Workshop" / "Labs" / "osmosis-lab-scan.pdf"
 
@@ -56,13 +55,27 @@ class CodexScans(unittest.TestCase):
         self.assertEqual(command[-1], "-")
         self.assertIn("image 1 = page 1", seen["prompt"])
 
-    def test_page_without_text_or_image_is_named(self):
-        blank = self.root / "Lec" / "blank.pdf"
-        make_pdf(blank, [None])
-        with self.assertRaises(inputs.InputError) as caught:
-            self.prepare([blank])
-        self.assertEqual(caught.exception.code, "scan_no_image")
-        self.assertIn("Lec/blank.pdf: page 1", caught.exception.message)
+    def test_handwriting_strokes_are_rendered(self):
+        """Tablet notes: no text and no stored image, only vector pen strokes (like Lec/lec18.pdf)."""
+        from pypdf import PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        from PySide6.QtGui import QImage
+        writer = PdfWriter()
+        page = writer.add_blank_page(612, 792)
+        stroke = DecodedStreamObject()
+        stroke.set_data(b"q 0.25 0.32 0.71 RG 6 w 100 700 m 500 300 l S Q")
+        page[NameObject("/Contents")] = writer._add_object(stroke)
+        notes = self.root / "Lec" / "notes.pdf"
+        with open(notes, "wb") as f:
+            writer.write(f)
+        src = self.prepare([notes])["sources"][0]
+        self.assertEqual([im["page"] for im in src["image_parts"]], [1])
+        img = QImage(src["image_parts"][0]["path"])
+        self.assertEqual(max(img.width(), img.height()), 2000)
+        self.assertEqual(img.pixelColor(10, 10).name(), "#ffffff")  # paper is white, not black
+        scale = 2000 / 792
+        mid = img.pixelColor(round(300 * scale), round((792 - 500) * scale))  # PDF point (300, 500), on the stroke
+        self.assertLess(mid.red(), 160)
 
 
 if __name__ == "__main__":

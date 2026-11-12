@@ -12,7 +12,7 @@ Routing
                     formats: no text) -> a needs_original decision if the original is supported,
                     else unsupported_input with an export suggestion. Never sent silently.
                   With capabilities["scan_images"] (Codex, which has no PDF input), a little-text
-                  PDF instead stays a text source whose image_parts are JPEGs of the scanned pages
+                  PDF instead stays a text source whose image_parts are JPEGs of its rendered pages
                   under MIN_CHARS_PER_PAGE, written into payload_dir; no decision is asked.
 original_overrides holds source IDs the student approved for "Process original" in this job.
 
@@ -138,7 +138,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
             units = [u for u in units if u["unit"] == "page" and u["number"] in wanted]  # cache stays full-file
         low = _low_text_units(ext, units)
         if low and ext == ".pdf" and (capabilities or {}).get("scan_images"):
-            # Image-capable provider without PDF input (Codex): attach each little-text page's scan.
+            # Image-capable provider without PDF input (Codex): attach each little-text page as a picture.
             scanned = [u["number"] for u in units if len("".join(u["text"].split())) < MIN_CHARS_PER_PAGE] \
                 or pages or list(range(1, record["page_count"] + 1))
             if payload_dir is None:
@@ -149,7 +149,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
                 raise InputError(e.code, e.message.replace(path.name, source_id, 1), source_id=source_id)
             record.update(mode="text", text_parts=units, cache=conv["cache"], image_parts=images)
             warnings.append({"code": "scan_images", "source_id": source_id,
-                             "message": f"{source_id}: sending {len(scanned)} scanned page(s) as images."})
+                             "message": f"{source_id}: sending {len(scanned)} page(s) with little or no text as images."})
             sources.append(record)
             continue
         if low:

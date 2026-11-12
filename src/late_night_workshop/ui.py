@@ -817,7 +817,7 @@ def run_app() -> int:
         def update_provider_controls(self):
             codex = self.provider == "codex"
             self.efficient_box.setVisible(not codex)
-            self.efficient_note.setText("Codex uses extracted text; scanned PDF pages are sent as images. For "
+            self.efficient_note.setText("Codex uses extracted text; scanned or handwritten PDF pages are sent as images. For "
                                         "diagrams in text PDFs, choose Gemini API in Settings." if codex
                                         else EFFICIENT_NOTE)
 
