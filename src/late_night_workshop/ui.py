@@ -990,28 +990,42 @@ def run_app() -> int:
             self.browser.tag_dropped.connect(lambda tag, path: self.later(self.apply_tag, tag, path))
             self.browser.current_folder = lambda: self.state["current"]
             self.browser.check, self.browser.dropped = self.drop_allowed, self.record_drop
-            left.addWidget(self.browser)
+            left.addWidget(self.browser, 1)  # takes the room the panels below give up when hidden
+            # Everything under the file list folds away: the down arrow hides it, the up arrow brings it back.
+            self.extras_btn = QPushButton()
+            self.extras_btn.setFixedSize(56, 24)
+            self.extras_btn.setStyleSheet("font-size: 13px; padding: 0;")
+            self.extras_btn.clicked.connect(lambda: self.set_extras_open(not self.extras.isVisible()))
+            fold_row = QHBoxLayout()
+            fold_row.addStretch(1)
+            fold_row.addWidget(self.extras_btn)
+            fold_row.addStretch(1)
+            left.addLayout(fold_row)
+            self.extras = QWidget()
+            extras = QVBoxLayout(self.extras)
+            extras.setContentsMargins(0, 0, 0, 0)
+            extras.setSpacing(12)
             self.drop_zone = DropZone("Drop here to put files in the current folder")
             self.drop_zone.setAlignment(Qt.AlignCenter)
             self.drop_zone.setAccessibleName("Current folder drop target")
             self.drop_zone.setStyleSheet(f"border: 1px dashed {COLORS['control']}; border-radius: 8px; padding: 12px; color: {COLORS['secondary']};")
             self.drop_zone.target = lambda: str(self.state["current"]) if self.state else None
             self.drop_zone.check, self.drop_zone.dropped = self.drop_allowed, self.record_drop
-            left.addWidget(self.drop_zone)
+            extras.addWidget(self.drop_zone)
             hint = QLabel("Click a file or folder (or tick its box) to select it; double-click a folder to open it or a PDF to view it in Chrome. "
                           "Ctrl+click toggles without opening, "
                           "Shift+click adds a range. Drag rows onto a folder or Up to move them; drag "
                           "Recent downloads onto a folder to copy them.")
             hint.setWordWrap(True)
             hint.setProperty("role", "support")
-            left.addWidget(hint)
+            extras.addWidget(hint)
             self.bin_btn = QPushButton("Recent downloads")
             decorate(self.bin_btn, "recent-downloads")
             self.bin_btn.setAccessibleName("Recent downloads bin")
             self.bin_btn.setToolTip("Files Chrome finished downloading in the last hour. Opening this never "
                                     "changes or deletes them.")
             self.bin_btn.clicked.connect(self.toggle_bin)
-            left.addWidget(self.bin_btn)
+            extras.addWidget(self.bin_btn)
             self.bin_panel = QWidget()
             bin_lay = QVBoxLayout(self.bin_panel)
             bin_lay.setContentsMargins(0, 0, 0, 0)
@@ -1034,8 +1048,8 @@ def run_app() -> int:
             bin_row.addWidget(bin_close)
             bin_lay.addLayout(bin_row)
             self.bin_panel.setVisible(False)
-            left.addWidget(self.bin_panel)
-            left.addWidget(heading("Name tags · this folder"))
+            extras.addWidget(self.bin_panel)
+            extras.addWidget(heading("Name tags · this folder"))
             tag_row = QHBoxLayout()
             self.tag_edit = QLineEdit()
             self.tag_edit.setPlaceholderText("New tag, e.g. assignment")
@@ -1047,7 +1061,7 @@ def run_app() -> int:
             self.tag_add_btn.clicked.connect(self.add_tag)
             tag_row.addWidget(self.tag_edit, 1)
             tag_row.addWidget(self.tag_add_btn)
-            left.addLayout(tag_row)
+            extras.addLayout(tag_row)
             self.chip_box = QWidget()
             self.chip_row = QHBoxLayout(self.chip_box)
             self.chip_row.setContentsMargins(0, 0, 0, 0)
@@ -1056,11 +1070,13 @@ def run_app() -> int:
             chip_scroll.setWidgetResizable(True)
             chip_scroll.setFixedHeight(60)
             chip_scroll.setWidget(self.chip_box)
-            left.addWidget(chip_scroll)
+            extras.addWidget(chip_scroll)
             self.tag_note = QLabel("")
             self.tag_note.setWordWrap(True)
             self.tag_note.setProperty("role", "support")
-            left.addWidget(self.tag_note)
+            extras.addWidget(self.tag_note)
+            left.addWidget(self.extras)
+            self.set_extras_open(settings.extras_open())
             body.addWidget(left_panel)
 
             right_panel = QWidget()
@@ -2180,6 +2196,16 @@ def run_app() -> int:
         def remove_selected(self, path):
             workshops.deselect(self.state, path)
             self.mark_rows()
+
+        def set_extras_open(self, show: bool):
+            """Show or hide the drop area, hint, Recent downloads and Name tags; the file list takes the space."""
+            self.extras.setVisible(show)
+            self.extras_btn.setText("▼" if show else "▲")
+            tip = ("Hide the drop area, Recent downloads and Name tags to give the file list more room" if show
+                   else "Show the drop area, Recent downloads and Name tags")
+            self.extras_btn.setToolTip(tip)
+            self.extras_btn.setAccessibleName(tip)
+            settings.set_extras_open(show)
 
         # ---------- name tags: metadata in name_tags, the rename itself through the organizer ----------
         def load_tags(self):
