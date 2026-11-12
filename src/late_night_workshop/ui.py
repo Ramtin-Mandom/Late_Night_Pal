@@ -759,6 +759,8 @@ def run_app() -> int:
             self.bin_records = []
             self.anchor = None  # Shift+click range start (a row of the folder shown)
             self.row_paths = []
+            self.row_widgets = {}  # path -> the listed row's widgets, for in-place selection updates
+            self.shown_search = None  # the search result the list was last drawn from
             self.dropped = None  # (effect, paths, folder) recorded by a drop target during drag.exec
             self.pending_drop = None
             self.row_filter = RowDragFilter(self.start_browser_drag, lambda p: self.later(self.open_row, p))
@@ -1826,6 +1828,10 @@ def run_app() -> int:
             else:
                 self.folder_lbl.setText('Workshop root' if rel == '.' else rel)
             self.row_paths = [str(e["path"]) for e in entries]
+            self.row_widgets = {}
+            keep_scroll = self.state["current"] == before and self.shown_search is self.search_result
+            self.shown_search = self.search_result
+            scroll = self.browser.verticalScrollBar().value() if keep_scroll else 0
             self.save_lbl.setText(f"Save to: {'Workshop root' if rel == '.' else rel}")
             self.up_btn.setEnabled(self.state["current"] != self.state["root"])
             self.browser.hot = None  # its row widget is about to be deleted
@@ -1884,7 +1890,20 @@ def run_app() -> int:
                 item.setSizeHint(row.sizeHint())
                 self.browser.addItem(item)
                 self.browser.setItemWidget(item, row)
+                self.row_widgets[path] = (item, row, box, name, supported, ("Folder " if e["is_dir"] else "File ") + shown)
+            self.browser.verticalScrollBar().setValue(scroll)  # a redraw of the same folder keeps its place
             self.render_tags()  # chips belong to the folder now shown
+            self.refresh_selected()
+
+        def mark_rows(self):
+            """Show selection changes on the rows already listed, without rebuilding them, so the list
+            keeps its scroll position and rows while several files are picked (File Explorer style)."""
+            for path, (item, row, box, name, supported, label) in self.row_widgets.items():
+                sel = Path(path) in self.state["selected"]
+                box.setChecked(sel)
+                item.setData(Qt.AccessibleTextRole, label + (", selected" if sel else ""))
+                row.setStyleSheet(f"background: {SELECTED_BG}; color: {SELECTED_FG}; border-radius: 8px;" if sel else "")
+                name.setStyleSheet("text-align: left;" + ("" if sel or supported else f" color: {COLORS['muted']};"))
             self.refresh_selected()
 
         def refresh_selected(self):
@@ -2012,7 +2031,7 @@ def run_app() -> int:
             Opening a folder or PDF is a double-click (open_row)."""
             if mods & Qt.ShiftModifier and self.anchor is not None:
                 workshops.select_range(self.state, self.row_paths, self.anchor, path)
-                return self.refresh()
+                return self.mark_rows()
             self.anchor = path
             self.last_dir_click = path if not from_box else None
             self.toggle(path)
@@ -2040,7 +2059,7 @@ def run_app() -> int:
             self.open_folder(path)
 
         def view_pdf(self, path):
-            self.refresh()  # shows the undone toggle
+            self.mark_rows()  # shows the undone toggle
             if not Path(path).is_file():
                 self.status.setText(f"Error: {Path(path).name} no longer exists. Click Refresh to update the list.")
                 return
@@ -2149,7 +2168,8 @@ def run_app() -> int:
                 workshops.toggle_selection(self.state, path)
             except workshops.WorkshopError as e:
                 self.status.setText(f"Error: {e.message}")
-            self.refresh()
+                return self.refresh()
+            self.mark_rows()
 
         def open_folder(self, path):
             try:
@@ -2159,7 +2179,7 @@ def run_app() -> int:
 
         def remove_selected(self, path):
             workshops.deselect(self.state, path)
-            self.refresh()
+            self.mark_rows()
 
         # ---------- name tags: metadata in name_tags, the rename itself through the organizer ----------
         def load_tags(self):

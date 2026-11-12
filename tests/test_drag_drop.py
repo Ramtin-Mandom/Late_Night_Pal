@@ -147,6 +147,20 @@ class DragDrop(unittest.TestCase):
         workshops.browse(self.state, rows[1])  # opening a folder keeps the selection
         self.assertEqual(len(self.state["selected"]), 2)
 
+    def test_numbers_sort_like_explorer_and_shift_range_follows_them(self):
+        lectures = self.root / "Lectures"
+        for n in (1, 2, 3, 10, 18, 19, 20, 21, 22, 30):
+            self.write(lectures / f"lecture {n}.pdf", str(n))
+        names = [e["name"] for e in workshops.browse(self.state, lectures)]
+        self.assertEqual(names, ["lecture 1.pdf", "lecture 2.pdf", "lecture 3.pdf", "lecture 10.pdf", "lecture 18.pdf",
+                                 "lecture 19.pdf", "lecture 20.pdf", "lecture 21.pdf", "lecture 22.pdf",
+                                 "lecture 30.pdf", "old.pdf"])
+        rows = [str(e["path"]) for e in workshops.browse(self.state)]
+        workshops.toggle_selection(self.state, rows[4])  # click lecture 18
+        workshops.select_range(self.state, rows, rows[4], rows[8])  # Shift+click lecture 22
+        self.assertEqual([p.name for p in workshops.selected_sorted(self.state)],
+                         [f"lecture {n}.pdf" for n in (18, 19, 20, 21, 22)])
+
     def test_drag_label(self):
         self.assertEqual(ui.drag_label("move", [str(self.root / "a.pdf")]), "Move: a.pdf")
         self.assertEqual(ui.drag_label("copy", ["x", "y"]), "Copy 2 downloads")

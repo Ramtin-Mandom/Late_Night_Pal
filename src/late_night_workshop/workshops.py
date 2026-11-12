@@ -9,6 +9,7 @@ so renaming the app never loses them.
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
@@ -90,6 +91,16 @@ def is_inside(root: Path, path: Path) -> bool:
         return False
 
 
+_DIGITS = re.compile(r"(\d+)")
+
+
+def natural_key(name: str) -> tuple:
+    """File Explorer order: digit runs compare as numbers, the rest case-insensitively, so
+    "Lecture 2" < "Lecture 18" < "Lecture 20". Ties fall back to the plain name for a stable order."""
+    parts = _DIGITS.split(str(name).casefold())
+    return tuple((0, int(p), "") if i % 2 else (1, 0, p) for i, p in enumerate(parts)), str(name)
+
+
 def relative(state_or_root, path) -> str:
     root = state_or_root["root"] if isinstance(state_or_root, dict) else Path(state_or_root)
     return Path(path).resolve().relative_to(root).as_posix()
@@ -103,7 +114,7 @@ def browse(state: dict, folder=None) -> list[dict]:
         raise WorkshopError("outside_workshop", "That folder is outside the workshop.")
     state["current"] = target
     entries = []
-    for child in sorted(target.iterdir(), key=lambda c: (not c.is_dir(), c.name.lower())):
+    for child in sorted(target.iterdir(), key=lambda c: (not c.is_dir(), natural_key(c.name))):
         if child.name.startswith(".") or not is_inside(state["root"], child):
             continue
         resolved = child.resolve()
@@ -231,7 +242,7 @@ def set_pages(state: dict, path, text: str) -> None:
 
 def selected_sorted(state: dict) -> list[Path]:
     """Selected paths in stable workshop-relative order."""
-    return sorted(state["selected"], key=lambda p: relative(state, p).lower())
+    return sorted(state["selected"], key=lambda p: natural_key(relative(state, p)))
 
 
 def validate_paths(root, destination, paths) -> dict:
@@ -250,5 +261,5 @@ def validate_paths(root, destination, paths) -> dict:
         if not rp.is_file() or not os.access(rp, os.R_OK):
             raise WorkshopError("unreadable_input", f"Cannot read {Path(p).name}.", source_id=relative(root, rp))
         canonical.append(rp)
-    canonical.sort(key=lambda p: relative(root, p).lower())
+    canonical.sort(key=lambda p: natural_key(relative(root, p)))
     return {"root": root, "destination": dest, "paths": canonical}

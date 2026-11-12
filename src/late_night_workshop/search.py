@@ -21,7 +21,7 @@ MAX_NAMED_SKIPS = 3
 
 
 def _key(relative: str):
-    return (relative.lower(), relative)
+    return workshops.natural_key(relative)
 
 
 def search(root, query: str, cancelled=lambda: False) -> dict:
