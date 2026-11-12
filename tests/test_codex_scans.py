@@ -1,4 +1,4 @@
-"""Scanned PDFs with Codex: pages go as attached JPEGs (python -m unittest tests.test_codex_scans -v).
+"""Scanned PDFs with Codex: page JPEGs -> Luna Markdown -> Terra text (python -m unittest tests.test_codex_scans -v).
 
 Uses the real demo scan; the Codex process is stubbed, so no allowance is used."""
 import shutil
@@ -32,17 +32,82 @@ class CodexScans(unittest.TestCase):
     def prepare(self, paths):
         return inputs.prepare_inputs(self.root, paths, True, codex_client.CAPABILITIES, payload_dir=self.jobs)
 
-    def test_scan_becomes_attached_page_image(self):
+    def test_scan_is_read_by_luna_then_terra_gets_text(self):
         prep = self.prepare([self.scan])
         self.assertEqual(prep["decisions"], [])
         src = prep["sources"][0]
         self.assertEqual([im["page"] for im in src["image_parts"]], [1])
         self.assertEqual(Path(src["image_parts"][0]["path"]).read_bytes()[:2], b"\xff\xd8")  # JPEG
 
-        seen = {}
+        calls = []
+        transcript = "Osmosis: $x^2$ mass drops 14 percent"
 
         def fake_run(command, input, **kwargs):
-            seen.update(command=command, prompt=input.decode("utf-8"))
+            model = command[command.index("-m") + 1]
+            calls.append({"command": command, "model": model, "prompt": input.decode("utf-8")})
+            answer = ('{"markdown": "%s"}' % transcript
+                      if model == codex_client.READER_MODEL else '{"documents": []}')
+            Path(command[command.index("-o") + 1]).write_text(answer, encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        task = {"prompt": "TASK", "response_schema": {"type": "object", "properties": {}}}
+        appdata = Path(self.tmp.name, "appdata")
+        with mock.patch.object(codex_client, "find_cli", return_value="codex"), \
+                mock.patch.object(codex_client.subprocess, "run", fake_run), \
+                mock.patch.dict("os.environ", {"LOCALAPPDATA": str(appdata)}):
+            codex_client.generate_content(task, prep["sources"])
+            reader, writer = calls
+            self.assertEqual(reader["model"], "gpt-6-luna")
+            self.assertEqual(reader["command"][reader["command"].index("--image") + 1], src["image_parts"][0]["path"])
+            self.assertEqual(reader["command"][-1], "-")
+            self.assertIn("page 1 of Lec/lec18.pdf", reader["prompt"])
+            self.assertEqual(reader["command"].count("--image"), 1)  # one page per Luna call
+            self.assertEqual(writer["model"], "gpt-6.1-terra")
+            self.assertNotIn("--image", writer["command"])  # Terra gets text only
+            self.assertIn("[Lec/lec18.pdf - page 1]", writer["prompt"])
+            self.assertIn("(transcribed from the page image)\n" + transcript, writer["prompt"])
+
+            calls.clear()  # the same lecture again: the saved transcription is reused, Luna is not called
+            codex_client.generate_content(task, prep["sources"])
+            self.assertEqual([c["model"] for c in calls], ["gpt-6.1-terra"])
+
+    def test_bad_luna_answer_is_asked_again_and_never_cached(self):
+        src = self.prepare([self.scan])["sources"]
+        answers = ['{"markdown": "  "}', '{"markdown": "Page one text"}']
+        models = []
+
+        def fake_run(command, input, **kwargs):
+            model = command[command.index("-m") + 1]
+            models.append(model)
+            answer = answers.pop(0) if model == codex_client.READER_MODEL else '{"documents": []}'
+            Path(command[command.index("-o") + 1]).write_text(answer, encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+
+        appdata = Path(self.tmp.name, "appdata")
+        with mock.patch.object(codex_client.subprocess, "run", fake_run), \
+                mock.patch.dict("os.environ", {"LOCALAPPDATA": str(appdata)}):
+            done = codex_client.read_scans("codex", src)
+            self.assertEqual(models, ["gpt-6-luna", "gpt-6-luna"])  # the empty answer was asked once more
+            self.assertIn("Page one text", done[0]["text_parts"][0]["text"])
+            self.assertEqual(codex_client._cached(src[0], 1), "Page one text")
+
+            answers[:] = ['not json', 'still not json']  # a fresh page that never gets a usable answer
+            other = dict(src[0], fingerprint="sha256:" + "0" * 64)
+            with self.assertRaises(codex_client.CodexError):
+                codex_client.read_scans("codex", [other])
+            self.assertIsNone(codex_client._cached(other, 1))  # nothing wrong is saved for the next Generate
+
+    def test_text_pdf_goes_straight_to_terra(self):
+        """Only scanned pages are read by Luna; a PDF with real text makes one Terra call and no images."""
+        lecture = self.root / "Lec" / "lecture.pdf"
+        shutil.copy(ROOT / "demo" / "Biology Demo Workshop" / "Lectures" / "photosynthesis-lecture.pdf", lecture)
+        prep = self.prepare([lecture])
+        self.assertEqual(prep["sources"][0]["image_parts"], [])
+        models = []
+
+        def fake_run(command, input, **kwargs):
+            models.append(command[command.index("-m") + 1])
+            self.assertNotIn("--image", command)
             Path(command[command.index("-o") + 1]).write_text('{"documents": []}', encoding="utf-8")
             return subprocess.CompletedProcess(command, 0, b"", b"")
 
@@ -50,10 +115,7 @@ class CodexScans(unittest.TestCase):
         with mock.patch.object(codex_client, "find_cli", return_value="codex"), \
                 mock.patch.object(codex_client.subprocess, "run", fake_run):
             codex_client.generate_content(task, prep["sources"])
-        command = seen["command"]
-        self.assertEqual(command[command.index("--image") + 1], src["image_parts"][0]["path"])
-        self.assertEqual(command[-1], "-")
-        self.assertIn("image 1 = page 1", seen["prompt"])
+        self.assertEqual(models, ["gpt-6.1-terra"])
 
     def test_handwriting_strokes_are_rendered(self):
         """Tablet notes: no text and no stored image, only vector pen strokes (like Lec/lec18.pdf)."""

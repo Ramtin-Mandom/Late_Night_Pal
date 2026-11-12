@@ -106,7 +106,7 @@ def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
     spec = TASKS[task_id]
     index = "\n".join(f"- Source {i}: {s['source_id']}"
                       + (" (locally extracted text; page/slide markers in brackets"
-                         + ("; scanned pages attached as images" if s.get("image_parts") else "") + ")"
+                         + ("; scanned pages transcribed from page images, marked (transcribed from the page image)" if s.get("image_parts") else "") + ")"
                          if s.get("mode") == "text" else "")
                       + pdf_pages.mapping_note(s)
                       for i, s in enumerate(sources, 1))

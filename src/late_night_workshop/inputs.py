@@ -13,7 +13,8 @@ Routing
                     else unsupported_input with an export suggestion. Never sent silently.
                   With capabilities["scan_images"] (Codex, which has no PDF input), a little-text
                   PDF instead stays a text source whose image_parts are JPEGs of its rendered pages
-                  under MIN_CHARS_PER_PAGE, written into payload_dir; no decision is asked.
+                  under MIN_CHARS_PER_PAGE, written into payload_dir; no decision is asked (codex_client
+                  transcribes them before generating).
 original_overrides holds source IDs the student approved for "Process original" in this job.
 
 PDF page choices (P3-M2): page_selections maps a selected PDF's canonical path to None (All pages)
@@ -149,7 +150,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
                 raise InputError(e.code, e.message.replace(path.name, source_id, 1), source_id=source_id)
             record.update(mode="text", text_parts=units, cache=conv["cache"], image_parts=images)
             warnings.append({"code": "scan_images", "source_id": source_id,
-                             "message": f"{source_id}: sending {len(scanned)} page(s) with little or no text as images."})
+                             "message": f"{source_id}: {len(scanned)} page(s) with little or no text will be read from page images."})
             sources.append(record)
             continue
         if low:
