@@ -4,7 +4,7 @@ The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT
 
 Current state: Phase 3 complete (P3-M6). The same flow, plus search, PDF pages, History, Reuse settings and Progress, runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
-Choose **Settings → Generation method** from either screen. Codex is the default and uses the signed-in CLI and extracted text. Gemini API also supports original PDFs. The choice persists across restarts and takes effect on the next Generate, including after reusing a History entry.
+Choose **Settings → Generation method** from either screen. Codex is the default and uses the signed-in CLI and extracted text; scanned PDF pages go to it as attached page images (status: `Lec/lec18.pdf: sending 1 scanned page(s) as images.`), with no dialog. Gemini API also supports original PDFs. The choice persists across restarts and takes effect on the next Generate, including after reusing a History entry.
 
 Running example using Gemini API: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
 
@@ -104,9 +104,10 @@ Example selection: `Lectures/topic.pdf` (2 text pages), `Readings/topic.pdf`, `S
 
 - **Efficient off:** both PDFs go as originals (`Source 1: Lectures/topic.pdf` + document item, `Source 2: Readings/topic.pdf` + document item). Gemini isn't configured to take PPTX originals, so `deck.pptx` goes as attributed text, and the status line says `Slides/deck.pptx was converted to text locally …`.
 - **Efficient on:** `converters.convert()` extracts each file (cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`, keyed by content hash and converter version). The request carries one text item per file: `Source 1: Lectures/topic.pdf (text extracted locally …)`, `[Lectures/topic.pdf - page 1] …`, `[Lectures/topic.pdf - page 2] …`, `[end of Lectures/topic.pdf]`, then `Readings/topic.pdf`, then `[Slides/deck.pptx - slide N]`. The two `topic.pdf` files stay distinct by source ID.
-- **Scan:** with Efficient on, `Scans/scan.pdf` (image only) extracts to nearly no text, so preparation returns a `needs_original` decision for page 1. The worker emits `decision_needed` and waits; the UI thread shows "`Scans/scan.pdf` (page 1) has little or no extractable text…" with **Process original** / **Cancel**.
+- **Scan (Gemini):** with Efficient on, `Scans/scan.pdf` (image only) extracts to nearly no text, so preparation returns a `needs_original` decision for page 1. The worker emits `decision_needed` and waits; the UI thread shows "`Scans/scan.pdf` (page 1) has little or no extractable text…" with **Process original** / **Cancel**.
   - **Process original:** preparation reruns with `original_overrides={"Scans/scan.pdf"}`. Only that file is sent as a document item; `Lectures/topic.pdf` stays text, in the same single request.
   - **Cancel:** `generate()` returns `cancelled` before any API call, so nothing is written. The status reads "Cancelled. Nothing was sent or saved.", the selection stays, and Generate is enabled again.
+- **Scan (Codex):** `Scans/scan.pdf` stays a text source and its little-text pages are attached as JPEGs (`image_parts`); no decision is asked. A page with no text and no scan image fails before the call with `Scans/scan.pdf: page N has no extractable text and no scanned image…`.
 - **Unusable files** fail before Gemini with the file named: a corrupt DOCX (`Could not read text from broken.docx`), or an empty PPTX or an image with no supported original (`… Export it as a text-based PDF, DOCX or TXT …`).
 
 ## Timing (live, 2 one-page PDFs, 2026-11-07)

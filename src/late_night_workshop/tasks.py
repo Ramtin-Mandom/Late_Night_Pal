@@ -105,7 +105,9 @@ def package_list() -> str:
 def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
     spec = TASKS[task_id]
     index = "\n".join(f"- Source {i}: {s['source_id']}"
-                      + (" (locally extracted text; page/slide markers in brackets)" if s.get("mode") == "text" else "")
+                      + (" (locally extracted text; page/slide markers in brackets"
+                         + ("; scanned pages attached as images" if s.get("image_parts") else "") + ")"
+                         if s.get("mode") == "text" else "")
                       + pdf_pages.mapping_note(s)
                       for i, s in enumerate(sources, 1))
     body = resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", "")))

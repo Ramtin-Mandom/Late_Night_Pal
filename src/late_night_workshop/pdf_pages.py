@@ -7,6 +7,7 @@ physical page numbers, e.g. [1, 3, 4]. That is what requests carry and what hist
     validate(choice, page_count, filename)   -> [1, 3, 4] | None (bounds; a list naming every page -> None)
     inspect(path) -> page count               (raises PageError for encrypted / unreadable PDFs)
     write_subset(path, pages, out_path)      -> {path, fingerprint, size, page_map}
+    write_page_images(path, pages, out_dir, stem) -> [{page, path}]  (scans as JPEGs, for Codex)
     format_pages([1, 3, 4]) -> "1, 3-4";  describe(choice, count) -> "Pages 1, 3-4 (3 of 12)"
 """
 
@@ -120,6 +121,50 @@ def write_subset(path, pages, out_path, data: bytes | None = None) -> dict:
     out_path.write_bytes(payload)
     return {"path": str(out_path), "fingerprint": "sha256:" + hashlib.sha256(payload).hexdigest(),
             "size": len(payload), "page_map": list(pages)}
+
+
+SCAN_MAX_SIDE = 2000   # px; larger scans are downscaled before they are attached
+SCAN_MIN_SIDE = 64     # px; smaller embedded images (logos, bullets) are not page scans
+
+
+def write_page_images(path, pages, out_dir, stem: str, data: bytes | None = None) -> list[dict]:
+    """The scanned images embedded in `pages` (original numbers), saved as JPEGs for an
+    image-capable provider: [{page, path}] in page order. A page without a usable image raises
+    PageError("scan_no_image"), because it has neither text nor a scan to send."""
+    from PIL import Image
+    path = Path(path)
+    reader = _reader(data if data is not None else path.read_bytes(), path.name)
+    images = []
+    for n in pages:
+        found = 0
+        try:
+            embedded = list(reader.pages[n - 1].images)
+        except Exception:
+            embedded = []
+        for item in embedded:
+            try:
+                img = item.image
+                img.load()
+            except Exception:
+                continue
+            if min(img.size) < SCAN_MIN_SIDE:
+                continue
+            if img.mode in ("RGBA", "LA", "P"):
+                img = img.convert("RGBA")
+                flat = Image.new("RGB", img.size, "white")
+                flat.paste(img, mask=img.getchannel("A"))
+                img = flat
+            elif img.mode not in ("RGB", "L"):
+                img = img.convert("RGB")
+            img.thumbnail((SCAN_MAX_SIDE, SCAN_MAX_SIDE))
+            found += 1
+            out = Path(out_dir) / f"{stem}-p{n:04d}-{found}.jpg"
+            img.save(out, "JPEG", quality=85)
+            images.append({"page": n, "path": str(out)})
+        if not found:
+            raise PageError("scan_no_image", f"{path.name}: page {n} has no extractable text and no scanned "
+                            "image to send. Select Gemini API in Settings to send the original PDF, or use an OCR copy.")
+    return images
 
 
 def mapping_note(source: dict) -> str:

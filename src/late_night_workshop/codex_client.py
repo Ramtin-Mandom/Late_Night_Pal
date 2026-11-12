@@ -10,8 +10,23 @@ from . import AppError
 from .gemini_client import text_source_item
 
 
+CAPABILITIES = {"original_mime_types": [], "scan_images": True}  # no PDF input; scans go as page images
+MAX_IMAGES = 60  # per request, across all sources
+
+
 class CodexError(AppError):
     stage = "generating"
+
+
+def source_item(i, source, first_image):
+    """The attributed text item, plus which attached images hold this source's scanned pages."""
+    text = text_source_item(i, source)
+    images = source.get("image_parts") or []
+    if not images:
+        return text
+    order = ", ".join(f"image {first_image + k} = page {im['page']}" for k, im in enumerate(images))
+    return (f"{text}\nScanned pages of {source['source_id']} are attached as images ({order}). Read each image as "
+            f"that page's content and cite it as [{source['source_id']} - page N].")
 
 
 def strict_schema(node):
@@ -38,7 +53,13 @@ def generate_content(task, sources):
     executable = find_cli()
     if not executable:
         raise CodexError("codex_missing", "Install the Codex CLI on PATH, run codex login, then restart Late Night Pal.")
-    parts = [text_source_item(i, source) for i, source in enumerate(sources, 1)]
+    parts, images = [], []
+    for i, source in enumerate(sources, 1):
+        parts.append(source_item(i, source, len(images) + 1))
+        images += [im["path"] for im in source.get("image_parts") or []]
+    if len(images) > MAX_IMAGES:
+        raise CodexError("input_too_large", f"{len(images)} scanned pages is more than Codex takes at once "
+                         f"({MAX_IMAGES}). Select fewer files or pages.")
     parts.append(task["prompt"])
     with tempfile.TemporaryDirectory(prefix="lnp_codex_") as folder:
         schema = Path(folder, "schema.json")
@@ -47,7 +68,10 @@ def generate_content(task, sources):
         command = [executable, "-a", "never", "exec", "--sandbox", "read-only", "--ephemeral",
                    "-c", 'forced_login_method="chatgpt"', "--skip-git-repo-check", "--ignore-user-config",
                    "--disable", "shell_tool",
-                   "-c", 'web_search="disabled"', "--output-schema", str(schema), "-o", str(output), "-"]
+                   "-c", 'web_search="disabled"']
+        for image in images:  # each before a flag, so the variadic --image never swallows "-"
+            command += ["--image", image]
+        command += ["--output-schema", str(schema), "-o", str(output), "-"]
         try:
             run = subprocess.run(command, cwd=folder, input="\n\n".join(parts).encode("utf-8"),
                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900,

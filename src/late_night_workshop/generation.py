@@ -171,7 +171,7 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         progress("preparing", "Checking LaTeX and output folder...")
         d["check_runtime"]()  # before any paid call
         outputs.check_destination(checked["destination"], checked["root"])
-        caps = {"original_mime_types": []} if method == "codex" else gemini_client.get_capabilities()
+        caps = codex_client.CAPABILITIES if method == "codex" else gemini_client.get_capabilities()
         efficient = method == "codex" or bool(request.get("efficient", False))
         if efficient:
             progress("preparing", "Converting files to text locally...")

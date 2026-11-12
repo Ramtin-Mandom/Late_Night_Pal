@@ -12,6 +12,7 @@ dependencies = [
     "google-genai>=3.0",
     "python-dotenv>=1.0",
     "pypdf>=4.0",
+    "Pillow>=10.0",  # scanned PDF pages -> JPEGs for Codex (pdf_pages.write_page_images)
     "python-pptx>=1.0",
     "python-docx>=1.1",
 ]
