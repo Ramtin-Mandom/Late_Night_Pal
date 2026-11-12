@@ -1,6 +1,6 @@
 # Late Night Pal
 
-A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Gemini. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate sends one Gemini request, and every PDF is compiled locally with LaTeX. Nothing existing is ever overwritten.
+A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Codex (default) or the Gemini API. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate starts with one request to the selected provider, and every PDF is compiled locally with LaTeX. Nothing existing is ever overwritten.
 
 | Output type | Task | Parameters | Result in the current folder |
 | --- | --- | --- | --- |
@@ -10,13 +10,14 @@ A desktop study sidekick that turns study PDFs into locally compiled study PDFs 
 
 If a name is taken, the new output gets a suffix: `summary (2).pdf` or `Study Schedule (2)/`. Days can be any positive whole number; the app never shortens a plan.
 
-**Inputs:** PDF, PPTX, DOCX, TXT and Markdown. With **Efficient** off, PDFs are sent to Gemini as they are, while PPTX and DOCX are converted to text locally (the status line says so). TXT and MD always go as text. With **Efficient** on, every file is converted to text locally first, keeping page and slide numbers. That can be cheaper, but diagrams, equations, tables and formatting may be lost. Conversions are cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`. If a PDF looks scanned (little or no text), the app asks whether to **Process original** (send that file as is) or **Cancel** (nothing is sent).
+**Inputs:** PDF, PPTX, DOCX, TXT and Markdown. Codex uses locally extracted text from the selected files and pages. For scans or visual content, choose **Settings → Generation method → Gemini API**. With Gemini and **Efficient** off, PDFs are sent to Gemini as they are, while PPTX and DOCX are converted to text locally (the status line says so). TXT and MD always go as text. With **Efficient** on, every file is converted to text locally first, keeping page and slide numbers. That can be cheaper, but diagrams, equations, tables and formatting may be lost. Conversions are cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`. In Gemini mode, if a PDF looks scanned (little or no text), the app asks whether to **Process original** (send that file as is) or **Cancel** (nothing is sent).
 
 ## Prerequisites (Windows)
 
 - Python 3.11+
-- [MiKTeX](https://miktex.org/download) with `lualatex` on PATH. If compiling fails with `lualatex.fmt` errors, rebuild the format once from a normal terminal: `miktex formats build lualatex --engine luahbtex` (the app compiles in a restricted process that can't start MiKTeX's own format builder or package installer; approve any MiKTeX package-install prompt it shows). The app checks for it before making any API call. Gemini writes each PDF's body in LaTeX using the packages in `rendering.ALLOWED_PACKAGES`; install them beforehand (`siunitx` and `mhchem` are not in a basic MiKTeX; the command is at the end of `latex-packages.txt`), because the compiler runs restricted and cannot reliably install packages on the fly.
-- A Gemini API key from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- [MiKTeX](https://miktex.org/download) with `lualatex` on PATH. If compiling fails with `lualatex.fmt` errors, rebuild the format once from a normal terminal: `miktex formats build lualatex --engine luahbtex` (the app compiles in a restricted process that can't start MiKTeX's own format builder or package installer; approve any MiKTeX package-install prompt it shows). The app checks for it before making any API call. The selected provider writes each PDF's body in LaTeX using the packages in `rendering.ALLOWED_PACKAGES`; install them beforehand (`siunitx` and `mhchem` are not in a basic MiKTeX; the command is at the end of `latex-packages.txt`), because the compiler runs restricted and cannot reliably install packages on the fly.
+- For Codex, use the Codex CLI bundled with Codex desktop on Windows, or install the [Codex CLI](https://developers.openai.com/codex/cli/) on PATH. Sign in using `codex login` with your ChatGPT account. Check access with `codex login status`.
+- For Gemini API, use a key from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
 ## Setup
 
@@ -27,7 +28,7 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m pip install -e ".[build]"
 ```
 
-Put the key in `.env` at the repository root (git ignores this file):
+For Gemini only, put the key in `.env` at the repository root (git ignores this file):
 
 ```text
 GEMINI_API_KEY=your-key-here
@@ -48,10 +49,10 @@ Demo flow:
 1. On the start screen, click **Open Workshop** (or **Create Workshop**) and choose a folder. Recent Workshops are remembered in `%LOCALAPPDATA%\late_night_workshop\recents.json`.
 2. Double-click a folder to open it (a single click selects it), and use **Up** to go back. Click a PDF, PPTX, DOCX, TXT or MD file to select it: it turns blue and appears under **Selected Inputs** with its workshop-relative path. Click it again to deselect. Double-click a PDF to read it in Chrome (or the default PDF viewer if Chrome isn't installed); this doesn't change the selection. The selection stays as you move between folders. Ctrl+click toggles a row without opening it, and Shift+click adds a range.
    To find a file anywhere in the workshop, type part of its name in the search field above the list (for the demo workshop, `lecture`). Results show workshop-relative paths, so two files with the same name are told apart. Click to select a result, double-click to open a PDF or folder, or use **Show in folder**. Search doesn't change **Save to**; clear the box to go back to the folder you were in, with your selection kept.
-   To use only part of a PDF, type pages into its **Pages** box under **Selected Inputs**, such as `1, 3-5, 8`, and press Enter. The note shows the page count and the cleaned-up selection (`Pages 1, 3-5, 8 (5 of 12)`), or what's wrong in red. Leave it empty for All pages. Only those pages are sent, and Gemini is told their original page numbers.
+   To use only part of a PDF, type pages into its **Pages** box under **Selected Inputs**, such as `1, 3-5, 8`, and press Enter. The note shows the page count and the cleaned-up selection (`Pages 1, 3-5, 8 (5 of 12)`), or what's wrong in red. Leave it empty for All pages. Only those pages are sent, and the provider is told their original page numbers.
    To organize by hand, drag files or folders onto a folder row, onto **Up**, or onto the "Drop here…" box to **move** them (dragging a selected row moves the whole selection), and drag rows from **Recent downloads** onto a folder to **copy** them in. Names that are taken get ` (2)`; nothing is overwritten, and the status line says what happened ("Moved 3 files to Lectures.").
 3. Go to the folder where the result should go. Optionally tick **Efficient**. Choose an **Output type** and **Task**, then set the Language style (Single file) or Days and an optional Folder name (Study plan). Changing tasks keeps your selection.
-4. Click **Generate**. All selected files go to Gemini in one request, and the outputs from the table above are saved in the current folder without opening them. Use **Open document** / **Open output folder** when you want to view the results.
+4. Click **Generate**. All selected files go to the provider selected under **Settings → Generation method** in one request, and the outputs from the table above are saved in the current folder without opening them. Use **Open document** / **Open output folder** when you want to view the results.
 5. Click **History** (next to Organize and Make me) to see this workshop's earlier generations, newest first: task, time, inputs with their page choices, settings and the saved PDFs. Select one and use **Open document** or **Open output folder**; files that were moved or deleted are marked unavailable. History is stored in `%LOCALAPPDATA%\late_night_workshop\history\` (one file per workshop, paths relative to it; no API key or document text). If saving History fails, the PDFs are still saved and the status says so: click **Retry saving history** to try again without regenerating. An unreadable history file is kept for recovery and named in a warning.
    **Reuse settings** puts a History entry's inputs, page choices, task, settings, Efficient and Save to folder back into **Make me** so you can generate again (nothing runs until you click **Generate**). If something changed since, such as a deleted input, a file with new contents, pages that no longer exist or a missing Save to folder, the note at the top of Make me names it and Generate stays off until you fix it or choose an option such as **Accept current file** or **Save to current folder**.
    Moving or renaming files with Organize, drag and drop or name tags updates History, so its Open buttons follow the move. If that update can't be saved, use **Retry saving history**: it only rewrites History and never moves files again.
@@ -100,7 +101,7 @@ Build from the repository root (about 1½ minutes):
 
 1. Install [MiKTeX](https://miktex.org/download) and make sure `lualatex` is on PATH. Compile something once so MiKTeX finishes installing its packages and fonts before the demo.
 2. Extract the ZIP anywhere. A short path such as `C:\Demo` is safest.
-3. Provide the Gemini key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
+3. Set up the signed-in Codex CLI, or select **Settings → Generation method → Gemini API** and provide its key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
 4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 16 bundled resources (prompts, templates, the LaTeX read guard and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
 
 The executable is windowed. Command-line modes print to the PowerShell window they were started from.
@@ -117,7 +118,7 @@ The demo workshop is `Demo\Biology Demo Workshop\` in the ZIP, or `demo\Biology 
 
 1. Launch `Late Night Pal.exe` (or `.venv\Scripts\python -m late_night_workshop` from the repository). Click **Open Workshop** and choose your fresh copy. Later you can reopen it from **Recent Workshops**.
 2. Click `[folder] Lectures` → `photosynthesis-lecture.pdf`, **Up**, `[folder] Labs` → `osmosis-lab-scan.pdf`, **Up**, `[folder] Revision`. **Selected Inputs** shows both relative paths.
-3. Choose **Output type: Study plan**, **Task: Make daily study plan**, **Days: 2**, leave **Folder name** empty, and tick **Efficient**. Click **Generate**.
+3. Select **Settings → Generation method → Gemini API** for this scanned-PDF demo. Choose **Output type: Study plan**, **Task: Make daily study plan**, **Days: 2**, leave **Folder name** empty, and tick **Efficient**. Click **Generate**.
 4. A dialog says `Labs/osmosis-lab-scan.pdf (page 1) has little or no extractable text…`. Click **Process original**.
 5. While Gemini works (about 2 minutes in the rehearsal; earlier runs took up to 7), open the labelled example `Example output\M6 Daily Study Plan (pre-fix)\Day 01\notes.pdf`. It was built from the scan and states the 0.8 M → −14% result, and its subtitle reads `From Labs/osmosis-lab-scan.pdf`. It is the M6 rehearsal output from **before the answer-label fix**, so its *Answers* sections lack `Q1`/`Q2` labels; fresh runs label them.
 6. When the status shows `Saved 6 PDFs in …\Revision\Daily Study Plan`, the PDFs stay in that folder without opening. Use **Open document** to view the first PDF or **Open output folder** to show `Day 01\` and `Day 02\`, each with `notes.pdf`, `sample-questions.pdf` and `checklist.pdf`.

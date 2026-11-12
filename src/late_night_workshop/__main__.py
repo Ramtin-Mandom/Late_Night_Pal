@@ -61,7 +61,10 @@ def main() -> int:
         except rendering.RenderError as e:
             ok = False
             print(f"latex: {e.message}")
-        import os
+        from .codex_client import find_cli
+        from .settings import generation_method
+        print(f"generation method: {generation_method()}")
+        print(f"codex CLI: {find_cli() or 'not found'}")
         from . import gemini_client
         try:
             gemini_client._client()  # loads .env files; never prints the key
@@ -89,15 +92,19 @@ def main() -> int:
 
     if args.summarize:
         from . import generation
+        from .settings import generation_method
         pdf = Path(args.summarize).resolve()
         result = generation.generate(
             {"workshop_root": str(pdf.parent), "destination": str(pdf.parent), "selected_paths": [str(pdf)],
-             "task_id": "summary", "parameters": {"language_style": "Standard"}, "efficient": False},
+             "provider": generation_method(), "task_id": "summary", "parameters": {"language_style": "Standard"}, "efficient": False},
             lambda ev: print(ev["message"]),
         )
         if result["status"] == "ok":
             print(result["paths"][0])
             return 0
+        if result["status"] == "cancelled":
+            print("Cancelled during input preparation.", file=sys.stderr)
+            return 1
         err = result["error"]
         print(f"error [{err['code']}]: {err['message']}", file=sys.stderr)
         if err["details"].get("log"):

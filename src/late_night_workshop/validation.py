@@ -36,7 +36,7 @@ class ValidationError(AppError):
 
 
 def _invalid(msg: str):
-    return ValidationError("invalid_response", f"Gemini returned an unusable response: {msg}", retryable=True)
+    return ValidationError("invalid_response", f"The provider returned an unusable response: {msg}", retryable=True)
 
 
 def latex_problems(code: str) -> list[str]:

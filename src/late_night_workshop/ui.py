@@ -138,7 +138,7 @@ def describe_saved(result: dict) -> str:
         text += "\nAdded to History." + h.get("note", "")
     elif h:
         text += (f"\nThe PDFs above were saved, but History was not updated: {h['message']}"
-                 + ("\nUse Retry saving history; nothing will be sent to Gemini again." if h.get("record") else ""))
+                 + ("\nUse Retry saving history; generation will not run again." if h.get("record") else ""))
     if result.get("warnings"):
         text += "\n" + "\n".join(w["message"] for w in result["warnings"])
     return text
@@ -189,12 +189,12 @@ EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This ca
                   "but diagrams, equations, tables, and formatting may be lost.")
 
 
-STAGE_LABELS = {"preparing": "Preparing", "awaiting_input": "Waiting for you", "generating": "Gemini",
+STAGE_LABELS = {"preparing": "Preparing", "awaiting_input": "Waiting for you", "generating": "Generating",
                 "validating": "Checking", "rendering": "Rendering", "publishing": "Saving"}
-FAILED_STAGE = {"preparing": "Preparing inputs", "validating": "Checking the request or Gemini's response",
-                "generating": "Gemini request", "rendering": "Local PDF compilation", "publishing": "Saving"}
+FAILED_STAGE = {"preparing": "Preparing inputs", "validating": "Checking the request or response",
+                "generating": "Generation request", "rendering": "Local PDF compilation", "publishing": "Saving"}
 NEXT_STEP = {
-    "compile_failed": "Click Generate to try again; a fresh Gemini response usually compiles. The LaTeX log is listed below.",
+    "compile_failed": "Click Generate to try again; a fresh response usually compiles. The LaTeX log is listed below.",
     "invalid_response": "Click Generate to try again. If it keeps failing, try fewer files or a different task.",
     "page_limit_exceeded": "Select less material, or use Notes/Summary instead of a one-page cheat sheet.",
     "api_quota": "Wait a minute, then click Generate again.",
@@ -227,12 +227,13 @@ def describe_error(error: dict) -> str:
 
 
 def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None,
-                  efficient: bool = False) -> dict:
+                  efficient: bool = False, provider: str = "codex") -> dict:
     """Snapshot taken at Generate time; later browsing cannot change it."""
     return {
         "workshop_root": str(state["root"]),
         "destination": str(state["current"]),
         "selected_paths": [str(p) for p in workshops.selected_sorted(state)],
+        "provider": provider,
         "task_id": task_id,
         "parameters": dict(parameters or {}),
         "efficient": bool(efficient),
@@ -377,8 +378,9 @@ def describe_drop(result: dict, effect: str) -> str:
 
 
 def run_app() -> int:
+    from . import settings
     from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QSize, Qt, QThread, QTimer, QUrl, Signal
-    from PySide6.QtGui import QBrush, QColor, QDesktopServices, QDrag, QFontMetrics, QIcon, QPainter, QPixmap
+    from PySide6.QtGui import QActionGroup, QBrush, QColor, QDesktopServices, QDrag, QFontMetrics, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
                                    QGridLayout, QInputDialog, QLabel, QLineEdit, QProgressBar, QScrollArea, QSplitter, QSizePolicy,
                                    QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
@@ -427,7 +429,7 @@ def run_app() -> int:
             super().setText(text)
             self.setVisible(bool(text))
             if hasattr(self, "progress"):
-                active = text.startswith(("Starting", "Preparing:", "Gemini:", "Checking:", "Rendering:", "Saving:"))
+                active = text.startswith(("Starting", "Preparing:", "Generating:", "Checking:", "Rendering:", "Saving:"))
                 self.progress.setVisible(active)
             if hasattr(self, "details"):
                 self.details.setVisible(bool(text))
@@ -792,7 +794,29 @@ def run_app() -> int:
             self.setMinimumSize(800, 560)
             area = QApplication.primaryScreen().availableGeometry()
             self.resize(min(1200, area.width()), min(780, area.height()))
+            self.provider = settings.generation_method()
+            menu = self.menuBar().addMenu("Settings").addMenu("Generation method")
+            group = QActionGroup(self)
+            for value, label in settings.METHODS.items():
+                action = menu.addAction(label)
+                action.setCheckable(True)
+                action.setData(value)
+                group.addAction(action)
+                action.setChecked(value == self.provider)
+            group.triggered.connect(self.choose_provider)
+            self.update_provider_controls()
             self.show_start()
+
+        def choose_provider(self, action):
+            self.provider = action.data()
+            settings.preferences().setValue("generation/method", self.provider)
+            self.update_provider_controls()
+
+        def update_provider_controls(self):
+            codex = self.provider == "codex"
+            self.efficient_box.setVisible(not codex)
+            self.efficient_note.setText("Codex uses extracted text. For scans or diagrams, choose Gemini API "
+                                        "in Settings." if codex else EFFICIENT_NOTE)
 
         # ---------- start screen ----------
         def _start_page(self):
@@ -1154,7 +1178,7 @@ def run_app() -> int:
             row.addWidget(self.open_folder_btn)
             self.retry_history_btn = QPushButton("Retry saving history")
             self.retry_history_btn.setToolTip("Save the History entry again. The PDFs are already saved; "
-                                              "nothing is sent to Gemini.")
+                                              "generation will not run.")
             self.retry_history_btn.clicked.connect(self.retry_history)
             self.retry_history_btn.setVisible(False)
             row.addWidget(self.retry_history_btn)
@@ -1777,7 +1801,7 @@ def run_app() -> int:
             done = (["History entries saved (the PDFs were already saved)"] if outcomes else []) + (
                 ["History paths updated for the earlier file changes"] if result.get("count") else [])
             self.status.setText(("History still not saved: " + " ".join(failed)) if failed else
-                                "; ".join(done) + ". No file was moved again and nothing was sent to Gemini.")
+                                "; ".join(done) + ". No file was moved again and generation was not repeated.")
             if self.mode_stack.currentIndex() == 2:
                 self.load_history()
 
@@ -2461,7 +2485,7 @@ def run_app() -> int:
             if self.thread is not None or self.org_thread is not None or not make_me_status(self.state, self.page_info, self.reuse)["ok"]:
                 return  # duplicate click while running, or the selection has entries Make me can't use
             request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
-                                    self.efficient_box.isChecked())
+                                    self.provider == "codex" or self.efficient_box.isChecked(), self.provider)
             try:  # Days / Folder name / style checked before any work
                 tasks.validate_parameters(request["task_id"], request["parameters"])
             except tasks.TaskError as e:
@@ -2509,7 +2533,7 @@ def run_app() -> int:
             self.thread.wait()
             self.thread = None
             if result["status"] == "cancelled":
-                self.status.setText("Cancelled. Nothing was sent to Gemini or saved.")
+                self.status.setText("Cancelled. Nothing was sent or saved.")
             elif result["status"] == "ok":
                 self.last_paths = result["paths"]
                 self.last_output_root = result["output_root"]

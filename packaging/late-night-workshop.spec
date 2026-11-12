@@ -23,6 +23,9 @@ a = Analysis(
                   + ["pypdf", "dotenv"],
     excludes=["tkinter"],
 )
+# Qt uses Windows' system ICU exports. An unrelated ICU on the build PATH
+# (for example Poppler's version) can otherwise shadow the system DLL.
+a.binaries = [entry for entry in a.binaries if Path(entry[0]).name.lower() != "icuuc.dll"]
 pyz = PYZ(a.pure)
 # Windowed: no console behind the app. --check/--extract/--summarize attach to the parent console.
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Late Night Pal", console=False)

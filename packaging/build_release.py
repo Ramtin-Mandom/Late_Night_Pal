@@ -32,9 +32,10 @@ Requirements on this PC
   - Windows 10/11 (64-bit)
   - MiKTeX with lualatex on PATH (https://miktex.org/download). Run one compile once so
     MiKTeX finishes installing packages/fonts before the demo.
-  - A Gemini API key (https://aistudio.google.com/app/apikey)
+  - For Codex (default), use the Windows Codex desktop CLI or install Codex CLI on PATH. Sign in with ChatGPT.
+  - For Gemini API, get a key (https://aistudio.google.com/app/apikey)
 
-Key setup (pick one; the key is never included in this download)
+Gemini key setup (pick one; the key is never included in this download)
   - Copy .env.example to .env in this folder (next to "Late Night Pal.exe") and put your key in it, or
   - set the GEMINI_API_KEY environment variable before launching.
 
@@ -44,7 +45,7 @@ Launch
 
 Demo
   1. Copy "Demo\\Biology Demo Workshop" somewhere (e.g. your Desktop). Use a fresh copy for each run.
-  2. In the app: Open Workshop -> that copy. Select Lectures\\photosynthesis-lecture.pdf and
+  2. Choose Settings -> Generation method -> Gemini API for this scanned-PDF demo. Open Workshop -> that copy. Select Lectures\\photosynthesis-lecture.pdf and
      Labs\\osmosis-lab-scan.pdf, open the Revision folder.
   3. Study plan -> Make daily study plan, Days 2, Folder name empty, tick Efficient, Generate.
      Click "Process original" when asked about the scan.

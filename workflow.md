@@ -4,7 +4,9 @@ The proposed Phase 3 workflow and acceptance walkthrough are in [PHASE_3_PROJECT
 
 Current state: Phase 3 complete (P3-M6). The same flow, plus search, PDF pages, History, Reuse settings and Progress, runs from the packaged `Late Night Pal.exe` (README "Windows handoff build"). It was rehearsed with a fresh copy of `demo/Biology Demo Workshop`; see the README demo sequence. Open a workshop, select PDF, PPTX, DOCX, TXT or MD files across folders, choose one of eight tasks, optionally turn on Efficient, and generate into the current folder. Component names match `architecture.md`.
 
-Running example: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
+Choose **Settings → Generation method** from either screen. Codex is the default and uses the signed-in CLI and extracted text. Gemini API also supports original PDFs. The choice persists across restarts and takes effect on the next Generate, including after reusing a History entry.
+
+Running example using Gemini API: workshop `Biology Workshop/` containing `Lectures/topic.pdf` (photosynthesis), `Readings/topic.pdf` (plate tectonics), and `Revision/` with an existing `summary.pdf`.
 
 ## 1. Open a workshop
 
@@ -59,7 +61,7 @@ Below the browser, type `assignment` and press **+**: a chip appears for the **c
 
 - **Output type → Single file**: Task is Checklist, Notes, **Summary** (default), Answer key, One-page cheat sheet or Sample questions, plus **Language style** (Technical / **Standard** / Simple).
 - **Output type → Study plan**: Task is Make schedule or Make daily study plan, plus **Days** (any positive whole number, default 2) and **Folder name** (the placeholder shows the default, `Study Schedule` or `Daily Study Plan`).
-- **Efficient** (both output types, default off), with the note directly below it: "Converts files to text before sending them to Gemini. This can be much cheaper for some files, but diagrams, equations, tables, and formatting may be lost."
+- **Efficient** (Gemini API, both output types, default off), with the note directly below it: "Converts files to text before sending them to Gemini. This can be much cheaper for some files, but diagrams, equations, tables, and formatting may be lost."
 - **Generate** → `ui.build_request()` snapshot (including `efficient`) → `tasks.validate_parameters()`. A bad folder name such as `bad/name` shows an error in the status line, and no job starts.
 
 ## 4. Generate (example: Make daily study plan, Days = 2)
@@ -91,8 +93,8 @@ Other layouts:
 
 Nothing is published until every document has validated and compiled, and the temp folder and any staging folder are always removed. The selection, task, Days, Folder name, style and Efficient setting stay as they were, and Generate is enabled again.
 
-- **Malformed response** (for example, day 2's checklist missing): the status shows `Gemini: Gemini's response was unusable (missing checklist for day 2); asking Gemini once to fix it...`. If the repair is also incomplete, it ends with `Checking the request or Gemini's response failed: … (also after one repair attempt)`, then `Nothing was saved…` and `Click Generate to try again…`. That's two Gemini calls in total; no compile runs, and nothing is written.
-- **A document fails** (for example Day 02/sample-questions.pdf has an unclosed environment, uses a forbidden command, or the cheat sheet runs to two pages): the other documents still compile, then the status shows `Gemini: Couldn't compile Day 02/sample-questions.pdf; asking Gemini once to fix that document...`. Only that document's `latex_code` and the LaTeX error lines are sent, with no sources; documents that passed are not regenerated. If the repaired body passes, all six PDFs are published together. If it fails again, the job ends with `Local PDF compilation failed: Couldn't compile Day 02/sample-questions.pdf (also after one repair attempt).` and the LaTeX log path in `%LOCALAPPDATA%\late_night_workshop\logs\`. The PDFs that had compiled were only in the temp folder, so nothing appears in `Revision/`.
+- **Malformed response** (for example, day 2's checklist missing): the status shows `Generating: Gemini's response was unusable (missing checklist for day 2); asking Gemini once to fix it...`. If the repair is also incomplete, it ends with `Checking the request or response failed: … (also after one repair attempt)`, then `Nothing was saved…` and `Click Generate to try again…`. That's two Gemini calls in total; no compile runs, and nothing is written.
+- **A document fails** (for example Day 02/sample-questions.pdf has an unclosed environment, uses a forbidden command, or the cheat sheet runs to two pages): the other documents still compile, then the status shows `Generating: Couldn't compile Day 02/sample-questions.pdf; asking Gemini once to fix that document...`. Only that document's `latex_code` and the LaTeX error lines are sent, with no sources; documents that passed are not regenerated. If the repaired body passes, all six PDFs are published together. If it fails again, the job ends with `Local PDF compilation failed: Couldn't compile Day 02/sample-questions.pdf (also after one repair attempt).` and the LaTeX log path in `%LOCALAPPDATA%\late_night_workshop\logs\`. The PDFs that had compiled were only in the temp folder, so nothing appears in `Revision/`.
 - **Retry** from the same window: the full bundle lands in the next free folder, for example `Daily Study Plan (2)/` with all six PDFs, while an existing `Daily Study Plan/` stays byte-for-byte unchanged.
 - **Network error:** one automatic retry, shown as `Network problem while generating; retrying once...`. Quota, auth and size-limit errors aren't retried; they show what to fix (for example `Wait a minute, then click Generate again.`).
 
@@ -104,7 +106,7 @@ Example selection: `Lectures/topic.pdf` (2 text pages), `Readings/topic.pdf`, `S
 - **Efficient on:** `converters.convert()` extracts each file (cached in `%LOCALAPPDATA%\late_night_workshop\conversions\`, keyed by content hash and converter version). The request carries one text item per file: `Source 1: Lectures/topic.pdf (text extracted locally …)`, `[Lectures/topic.pdf - page 1] …`, `[Lectures/topic.pdf - page 2] …`, `[end of Lectures/topic.pdf]`, then `Readings/topic.pdf`, then `[Slides/deck.pptx - slide N]`. The two `topic.pdf` files stay distinct by source ID.
 - **Scan:** with Efficient on, `Scans/scan.pdf` (image only) extracts to nearly no text, so preparation returns a `needs_original` decision for page 1. The worker emits `decision_needed` and waits; the UI thread shows "`Scans/scan.pdf` (page 1) has little or no extractable text…" with **Process original** / **Cancel**.
   - **Process original:** preparation reruns with `original_overrides={"Scans/scan.pdf"}`. Only that file is sent as a document item; `Lectures/topic.pdf` stays text, in the same single request.
-  - **Cancel:** `generate()` returns `cancelled` before any API call, so nothing is written. The status reads "Cancelled. Nothing was sent to Gemini or saved.", the selection stays, and Generate is enabled again.
+  - **Cancel:** `generate()` returns `cancelled` before any API call, so nothing is written. The status reads "Cancelled. Nothing was sent or saved.", the selection stays, and Generate is enabled again.
 - **Unusable files** fail before Gemini with the file named: a corrupt DOCX (`Could not read text from broken.docx`), or an empty PPTX or an image with no supported original (`… Export it as a text-based PDF, DOCX or TXT …`).
 
 ## Timing (live, 2 one-page PDFs, 2026-11-07)

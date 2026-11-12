@@ -95,7 +95,7 @@ class Pages(unittest.TestCase):
                                   "items": gemini_client._source_items(sources)})
             return {"raw_text": "not json"}  # stops the job after the first request (one repair, then error)
 
-        request = {"workshop_root": str(self.root), "destination": str(self.root / "Revision"),
+        request = {"provider": "gemini", "workshop_root": str(self.root), "destination": str(self.root / "Revision"),
                    "selected_paths": [str(p) for p in paths], "task_id": "summary",
                    "parameters": {"language_style": "Standard"}, "efficient": efficient}
         if pages is not None:

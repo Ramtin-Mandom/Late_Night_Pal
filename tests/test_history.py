@@ -57,7 +57,7 @@ class History(unittest.TestCase):
         deps = {"generate_content": fake, "check_runtime": lambda: None, "render_bundle": fake_render}
         if publish:
             deps["publish"] = publish
-        return generation.generate({"workshop_root": str(root), "destination": str(root / "Revision"),
+        return generation.generate({"provider": "gemini", "workshop_root": str(root), "destination": str(root / "Revision"),
                                     "selected_paths": [str(p) for p in (paths or [self.pdf, self.txt])],
                                     "task_id": "summary", "parameters": {"language_style": "Simple"},
                                     "efficient": efficient,
@@ -105,7 +105,7 @@ class History(unittest.TestCase):
                 self.calls.append(task)
                 return {"raw_text": reply}
             return generation.generate({
-                "workshop_root": str(self.root), "destination": str(self.root / "Revision"),
+                "provider": "gemini", "workshop_root": str(self.root), "destination": str(self.root / "Revision"),
                 "selected_paths": [str(self.pdf), str(self.txt)], "task_id": "daily-study-plan",
                 "parameters": {"days": 2, "folder_name": "Week 5"}},
                 deps={"generate_content": fake, "check_runtime": lambda: None, "render_bundle": fake_render})

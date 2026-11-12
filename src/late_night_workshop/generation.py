@@ -28,7 +28,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import AppError, gemini_client, history, inputs, outputs, rendering, tasks, validation, workshops
+from . import AppError, codex_client, gemini_client, history, inputs, outputs, rendering, tasks, validation, workshops
 
 
 class RequestError(AppError):
@@ -37,7 +37,6 @@ class RequestError(AppError):
 
 DEFAULT_DEPS = {
     "check_runtime": rendering.check_runtime,
-    "generate_content": gemini_client.generate_content,
     "render_bundle": rendering.render_bundle,
     "publish": outputs.publish,
 }
@@ -93,6 +92,10 @@ def generate(request: dict, on_progress=lambda event: None, deps: dict | None = 
 
 def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
     d = {**DEFAULT_DEPS, **(deps or {})}
+    method = request.get("provider", "codex")
+    provider = "Codex" if method == "codex" else "Gemini"
+    client = codex_client if method == "codex" else gemini_client
+    generate_content = d.get("generate_content", client.generate_content)
     generation_id = request.get("generation_id") or history.new_generation_id()
     timings = {}
 
@@ -106,15 +109,15 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         finally:
             timings[key] = round(timings.get(key, 0) + time.perf_counter() - start, 1)
 
-    def ask_gemini(task, sources, label):
+    def ask_provider(task, sources, label):
         """One request, plus at most one visible retry for a transient network failure."""
         try:
-            return timed("gemini_s", d["generate_content"], task, sources)
-        except gemini_client.GeminiError as e:
+            return timed(f"{method}_s", generate_content, task, sources)
+        except AppError as e:
             if e.code != "api_network":
                 raise
             progress("generating", f"Network problem while {label}; retrying once...")
-            return timed("gemini_s", d["generate_content"], task, sources)
+            return timed(f"{method}_s", generate_content, task, sources)
 
     def validated(task, sources, response):
         """Validate; on failure send one visible schema-repair request, then give up."""
@@ -122,10 +125,10 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
             return validation.validate_bundle(response["raw_text"], task, sources)
         except validation.ValidationError as e:
             problem = e.message.split(": ", 1)[-1]
-            progress("generating", f"Gemini's response was unusable ({problem}); asking Gemini once to fix it...")
+            progress("generating", f"{provider}'s response was unusable ({problem}); asking {provider} once to fix it...")
             repair_task = dict(task, prompt=REPAIR_PROMPT.format(problem=problem, task_prompt=task["prompt"],
                                                                  raw=(response["raw_text"] or "")[:200_000]))
-            repaired = ask_gemini(repair_task, [], "repairing the response")
+            repaired = ask_provider(repair_task, [], "repairing the response")
             progress("validating", "Checking the repaired response...")
             try:
                 return validation.validate_bundle(repaired["raw_text"], task, sources)
@@ -136,11 +139,11 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
     def repair_document(doc, failure, task, bundle, sources, work_dir, subtitle, names):
         """The one targeted repair for a failed document: ask, recheck, recompile; else fail the job."""
         label = names[doc["document_id"]]
-        progress("generating", f"{failure['message']}; asking Gemini once to fix that document...")
+        progress("generating", f"{failure['message']}; asking {provider} once to fix that document...")
         repair_task = dict(task, response_schema=tasks.REPAIR_SCHEMA, prompt=DOCUMENT_REPAIR_PROMPT.format(
             problem=failure["problem"], role=doc["role"], day=doc["day"] or 0, title=doc["title"],
             task_prompt=task["prompt"], latex_code=doc["latex_code"]))
-        response = ask_gemini(repair_task, [], f"repairing {label}")
+        response = ask_provider(repair_task, [], f"repairing {label}")
         fixed = dict(doc, latex_code=validation.parse_document_repair(response["raw_text"]))
         problems = validation.document_problems(fixed, task, sources)
         if problems:
@@ -158,6 +161,8 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
                                     "\n".join(x for x in (again["problem"], log) if x), source_id=label)
 
     try:
+        if method not in ("codex", "gemini"):
+            raise RequestError("invalid_parameter", "Choose Codex or Gemini API in Settings.")
         tasks.validate_parameters(request.get("task_id"), request.get("parameters"))  # before any work
         if not request.get("selected_paths"):
             raise RequestError("no_inputs", "Select at least one PDF first.")
@@ -166,8 +171,8 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         progress("preparing", "Checking LaTeX and output folder...")
         d["check_runtime"]()  # before any paid call
         outputs.check_destination(checked["destination"], checked["root"])
-        caps = gemini_client.get_capabilities()
-        efficient = bool(request.get("efficient", False))
+        caps = {"original_mime_types": []} if method == "codex" else gemini_client.get_capabilities()
+        efficient = method == "codex" or bool(request.get("efficient", False))
         if efficient:
             progress("preparing", "Converting files to text locally...")
         selections = page_choices(request, checked["paths"])
@@ -192,10 +197,9 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         task = tasks.resolve_task(request, sources)
         subtitle = _subtitle(sources)
 
-        progress("generating", f"{task['label']}: sending {len(sources)} file(s) to Gemini "
-                               f"({gemini_client.model_name()})...")
-        response = ask_gemini(task, sources, "generating")
-        progress("validating", "Checking Gemini's response...")
+        progress("generating", f"{task['label']}: sending {len(sources)} file(s) to {provider}...")
+        response = ask_provider(task, sources, "generating")
+        progress("validating", f"Checking {provider}'s response...")
         bundle = validated(task, sources, response)
         names = outputs.relative_output_paths(task, bundle["documents"])
 

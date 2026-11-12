@@ -83,7 +83,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
                    original_overrides=frozenset(), page_selections=None, payload_dir=None) -> dict:
     if not selected_paths:
         raise InputError("no_inputs", "Select at least one file first.")
-    originals_ok = set((capabilities or {}).get("original_mime_types") or [MIME[".pdf"]])
+    originals_ok = set((capabilities or {}).get("original_mime_types", [MIME[".pdf"]]))
     sources, decisions, warnings = [], [], []
     choices = {Path(k): v for k, v in (page_selections or {}).items()}
     for index, path in enumerate(selected_paths, 1):
@@ -123,7 +123,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
             as_original()
             continue
         if not converters.supported(path):
-            raise InputError("unsupported_input", f"{source_id}: this file type can't be sent to Gemini or "
+            raise InputError("unsupported_input", f"{source_id}: this file type can't be sent to the selected provider or "
                              f"converted locally. {_export_hint(ext)}", source_id=source_id)
         try:
             conv = converters.convert(path, data)
@@ -142,12 +142,15 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
                                   "choices": ["process_original", "cancel"]})
                 sources.append(record)  # placeholder; not sent while decisions are unresolved
                 continue
-            raise InputError("unsupported_input", f"{source_id}: no usable text could be extracted, and Gemini "
+            if ext == ".pdf":
+                raise InputError("unsupported_input", f"{source_id}: too little extractable text. Select Gemini API in "
+                                 "Settings to send the original PDF, or use an OCR copy.", source_id=source_id)
+            raise InputError("unsupported_input", f"{source_id}: no usable text could be extracted, and the selected provider "
                              f"can't take this file type as an original. {_export_hint(ext)}", source_id=source_id)
         record.update(mode="text", text_parts=units, cache=conv["cache"])
         if not efficient and ext not in PASS_THROUGH:
             warnings.append({"code": "converted_locally", "source_id": source_id,
-                             "message": f"{source_id} was converted to text locally (Gemini doesn't accept "
+                             "message": f"{source_id} was converted to text locally (the selected provider doesn't accept "
                                         f"this file type directly)."})
         sources.append(record)
     return {"sources": sources, "decisions": decisions, "warnings": warnings}
