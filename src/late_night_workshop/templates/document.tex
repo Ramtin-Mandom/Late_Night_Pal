@@ -3,17 +3,19 @@
 % Greek, arrows and math symbols from source PDFs fall back to Windows fonts.
 \directlua{luaotfload.add_fallback("lnwfallback", {"Cambria:mode=node;", "Segoe UI Symbol:mode=node;"})}
 \setmainfont{Latin Modern Roman}[RawFeature={fallback=lnwfallback}]
-\usepackage[margin=2.5cm]{geometry}
+\usepackage[margin=2.2cm]{geometry}
 <<PACKAGES>>
 \usepackage{parskip}
 \setlist{nosep, leftmargin=1.5em}
+<<STYLE>>
 \pagestyle{plain}
-\title{<<TITLE>>}
-\date{<<SUBTITLE>>}
-\author{}
-% Everything after this line is Gemini's latex_code: the guard runs first.
+% Everything after this line is the generated latex_code: the guard runs first.
 \directlua{dofile("lnp-guard.lua")}
 \begin{document}
-\maketitle
+\begin{tcolorbox}[enhanced, colback=lnpindigo, colframe=lnpindigo, arc=3pt, boxrule=0pt,
+  left=12pt, right=12pt, top=10pt, bottom=9pt, before skip=0pt, after skip=14pt]
+{\color{white}\LARGE\bfseries <<TITLE>>\par}\vspace{4pt}
+{\color{white!80!lnpindigo}\small <<SUBTITLE>>\par}
+\end{tcolorbox}
 <<BODY>>
 \end{document}

@@ -54,6 +54,15 @@ class StaticChecks(unittest.TestCase):
                     r"\begin{document}", r"\UseName{directlua}"):
             self.assertTrue(validation.latex_problems(bad), bad)
 
+    def test_template_boxes_allowed_but_not_raw_tcolorbox(self):
+        """Bodies use the template's study boxes; tcolorbox options could save or load files."""
+        self.assertEqual(validation.latex_problems(
+            r"\begin{definition}[Ideal]x \src{Lec/a_b.pdf}{3}\end{definition}\begin{question}{Q1}y\end{question}"
+            r"\begin{checklist}\item z\end{checklist}\keyterm{w}"), [])
+        for bad in (r"\begin{tcolorbox}[saveto=x.tex]a\end{tcolorbox}", r"\tcbset{record={x}}",
+                    r"\tcbincludegraphics{C:/x.png}", r"\newtcolorbox{x}{}", r"\titleformat{\section}{}{}{0pt}{}"):
+            self.assertTrue(validation.latex_problems(bad), bad)
+
     def test_bundle_contract_rejects_missing_latex_code(self):
         task = {"layout": {"kind": "single"}, "expected": {"roles": ["notes"]}, "label": "Notes"}
         with self.assertRaises(validation.ValidationError):

@@ -12,6 +12,9 @@ Important for Late Night Pal
     geometry, parskip and the allowlist in rendering.ALLOWED_PACKAGES (amsmath, amssymb,
     mathtools, siunitx, mhchem, booktabs, array, multicol, enumitem, xcolor, tikz).
     Generated code cannot load any other package from this list.
+  - templates/style.tex (the coloured headings and study boxes) also loads tcolorbox
+    (with its pdfcol, tikzfill and environ helpers) and titlesec. They are in the
+    install command below in case another PC's MiKTeX lacks them.
   - Another PC does not get these from the ZIP. Install them there with the command
     at the end of this file.
 
@@ -127,5 +130,5 @@ Newly installed (MiKTeX package id, title)
   xstring            String manipulation for (La)TeX
 
 Install the same set on another PC (PowerShell, MiKTeX installed and on PATH)
-  foreach ($p in "adjustbox algorithm2e algorithmicx algorithms algpseudocodex arydshln bbm bigints bohr braket breqn cancel caption cases chemfig chemformula chemgreek chemmacros chemnum chemplants circuitikz collectbox colortbl commath csquotes delimset derivative diagbox diffcoeff doublestroke elements esint feynmp-auto firamath float fontawesome5 forest fourier fp framed gensymb interval jknappen karnaugh-map libertinus-fonts lm-math makecell marvosym mathalpha mathdots mdframed mhchem mleftright modiagram ncctools newtx nicematrix ntheorem pgf-blur physics psnfss pst-optic rsfso siunitx spreadtab steinmetz stix2-otf stmaryrd tensor tex-gyre-math textgreek thmtools threeparttable tikz-3dplot tikz-cd tikz-feynman tikzlings tikzpeople tkz-base tkz-euclide unicode-math units was wasysym wrapfig xfrac xits xlop xstring".Split(" ")) { miktex packages install $p }
+  foreach ($p in "tcolorbox titlesec pdfcol tikzfill environ adjustbox algorithm2e algorithmicx algorithms algpseudocodex arydshln bbm bigints bohr braket breqn cancel caption cases chemfig chemformula chemgreek chemmacros chemnum chemplants circuitikz collectbox colortbl commath csquotes delimset derivative diagbox diffcoeff doublestroke elements esint feynmp-auto firamath float fontawesome5 forest fourier fp framed gensymb interval jknappen karnaugh-map libertinus-fonts lm-math makecell marvosym mathalpha mathdots mdframed mhchem mleftright modiagram ncctools newtx nicematrix ntheorem pgf-blur physics psnfss pst-optic rsfso siunitx spreadtab steinmetz stix2-otf stmaryrd tensor tex-gyre-math textgreek thmtools threeparttable tikz-3dplot tikz-cd tikz-feynman tikzlings tikzpeople tkz-base tkz-euclide unicode-math units was wasysym wrapfig xfrac xits xlop xstring".Split(" ")) { miktex packages install $p }
   luaotfload-tool --update

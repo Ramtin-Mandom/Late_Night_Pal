@@ -6,13 +6,24 @@
 \usepackage[margin=1.2cm]{geometry}
 <<PACKAGES>>
 \setlist{nosep, leftmargin=1.1em}
+<<STYLE>>
+% Tight boxes that stay whole inside columns.
+\tcbset{lnpspace/.style={left=3pt, right=3pt, top=1.5pt, bottom=1.5pt, before skip=3pt, after skip=3pt,
+  toptitle=0.5pt, bottomtitle=0.5pt}, lnpbreak/.style={}}
+\titlespacing*{\section}{0pt}{4pt}{2pt}
+\titlespacing*{\subsection}{0pt}{3pt}{1pt}
+\titleformat{name=\section,numberless}{\normalsize\bfseries\color{lnpindigo}}{}{0pt}{}
+\titleformat{name=\subsection,numberless}{\small\bfseries\color{lnpteal}}{}{0pt}{}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{2pt}
 \setlength{\columnsep}{0.6cm}
 \pagestyle{empty}
-% Everything after this line is Gemini's latex_code: the guard runs first.
+% Everything after this line is the generated latex_code: the guard runs first.
 \directlua{dofile("lnp-guard.lua")}
 \begin{document}
-{\large\bfseries <<TITLE>>}\hfill{\scriptsize <<SUBTITLE>>}\par\vspace{2pt}
+\begin{tcolorbox}[enhanced, colback=lnpindigo, colframe=lnpindigo, arc=2pt, boxrule=0pt,
+  left=6pt, right=6pt, top=3pt, bottom=3pt, before skip=0pt, after skip=4pt]
+{\color{white}\large\bfseries <<TITLE>>}\hfill{\color{white!80!lnpindigo}\scriptsize <<SUBTITLE>>}
+\end{tcolorbox}
 <<BODY>>
 \end{document}

@@ -1,0 +1,61 @@
+% Late Night Pal look, shared by document.tex and cheat-sheet.tex (Python-owned; loaded before the guard).
+% The generated body may only use the environments and macros below; tcolorbox commands themselves are
+% rejected by validation.latex_problems, so a body can't pass its own box options.
+\usepackage[skins,breakable]{tcolorbox}
+\usepackage{titlesec}
+\definecolor{lnpink}{HTML}{1E293B}
+\definecolor{lnpblue}{HTML}{2563EB}
+\definecolor{lnpindigo}{HTML}{4338CA}
+\definecolor{lnpteal}{HTML}{0F766E}
+\definecolor{lnpgreen}{HTML}{15803D}
+\definecolor{lnporange}{HTML}{C2410C}
+\definecolor{lnpred}{HTML}{B91C1C}
+\definecolor{lnppurple}{HTML}{7E22CE}
+\definecolor{lnpgray}{HTML}{64748B}
+\definecolor{lnpyellow}{HTML}{FEF3C7}
+\AtBeginDocument{\color{lnpink}}
+
+% Headings
+\titleformat{\section}{\Large\bfseries\color{lnpindigo}}{\thesection}{0.6em}{}[\vspace{-2pt}{\color{lnpindigo!25}\titlerule[1pt]}]
+\titleformat{name=\section,numberless}{\Large\bfseries\color{lnpindigo}}{}{0pt}{}[\vspace{-2pt}{\color{lnpindigo!25}\titlerule[1pt]}]
+\titleformat{\subsection}{\large\bfseries\color{lnpteal}}{\thesubsection}{0.5em}{}
+\titleformat{name=\subsection,numberless}{\large\bfseries\color{lnpteal}}{}{0pt}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{lnpblue}}{\thesubsubsection}{0.5em}{}
+\titleformat{name=\subsubsection,numberless}{\normalsize\bfseries\color{lnpblue}}{}{0pt}{}
+\titleformat{\paragraph}[runin]{\normalsize\bfseries\color{lnpblue}}{}{0pt}{}
+
+% Boxes: \begin{definition}[Ideal] ... \end{definition}; the title is optional.
+% lnpspace / lnpbreak are restyled by cheat-sheet.tex for tight, unbreakable boxes in columns.
+\tcbset{
+  lnpspace/.style={left=7pt, right=7pt, top=4pt, bottom=4pt, before skip=9pt, after skip=9pt,
+    toptitle=1.5pt, bottomtitle=1.5pt},
+  lnpbreak/.style={breakable},
+  lnpbox/.style={enhanced, arc=2.5pt, boxrule=0pt, leftrule=3.2pt, titlerule=0pt,
+    colback=#1!6, colframe=#1, colbacktitle=#1!16, coltitle=#1!75!black, fonttitle=\bfseries,
+    lnpbreak, lnpspace}}
+\newcommand{\lnptitle}[2]{#1\if\relax\detokenize{#2}\relax\else: #2\fi}
+\NewTColorBox{definition}{ O{} }{lnpbox=lnpblue, title={\lnptitle{Definition}{#1}}}
+\NewTColorBox{theorem}{ O{} }{lnpbox=lnppurple, title={\lnptitle{Theorem}{#1}}}
+\NewTColorBox{lemma}{ O{} }{lnpbox=lnppurple, title={\lnptitle{Lemma}{#1}}}
+\NewTColorBox{formula}{ O{} }{lnpbox=lnpteal, title={\lnptitle{Formula}{#1}}}
+\NewTColorBox{example}{ O{} }{lnpbox=lnpgreen, title={\lnptitle{Example}{#1}}}
+\NewTColorBox{keyidea}{ O{} }{lnpbox=lnporange, title={\lnptitle{Key idea}{#1}}}
+\NewTColorBox{pitfall}{ O{} }{lnpbox=lnpred, title={\lnptitle{Common mistake}{#1}}}
+\NewTColorBox{note}{ O{} }{lnpbox=lnpgray, title={\lnptitle{Note}{#1}}}
+\NewTColorBox{summarybox}{ O{} }{lnpbox=lnpindigo, title={\lnptitle{In short}{#1}}}
+\NewTColorBox{question}{ m }{lnpbox=lnpblue, title={#1}}
+\NewTColorBox{answer}{ m }{lnpbox=lnpgreen, title={#1}}
+\NewTColorBox{proof}{ O{} }{enhanced, lnpbreak, lnpspace, frame hidden, colback=white, top=1pt, bottom=1pt,
+  borderline west={1.2pt}{0pt}{lnpgray!60}, before upper={\textit{\textbf{\textcolor{lnpgray}{\lnptitle{Proof}{#1}.}}}\ },
+  after upper={\hfill\textcolor{lnpgray}{$\blacksquare$}}}
+
+% Inline helpers
+\newcommand{\keyterm}[1]{\textbf{\textcolor{lnpindigo}{#1}}}
+\newcommand{\highlight}[1]{\colorbox{lnpyellow}{\strut #1}}
+\newcommand{\src}[2]{{\footnotesize\textcolor{lnpgray}{[\detokenize{#1}\if\relax\detokenize{#2}\relax\else, p.~#2\fi]}}}
+
+% Checklists: \begin{checklist} \item ... \end{checklist}
+\newlist{checklist}{itemize}{2}
+\setlist[checklist]{label=\textcolor{lnpteal}{$\square$}, leftmargin=1.6em}
+\setlist[itemize,1]{label=\textcolor{lnpindigo}{\textbullet}}
+\setlist[enumerate,1]{label=\textcolor{lnpindigo}{\bfseries\arabic*.}}

@@ -28,6 +28,7 @@ pdfextension pdfvariable pdffeedback pdfobj pdfliteral saveimageresource useimag
 filecontents verbatiminput lstinputlisting usetikzlibrary pgfplotstableread
 """.split())
 _COMMAND = re.compile(r"\\([A-Za-z]+)")
+_TCOLORBOX = re.compile(r"tcb|tcolorbox|titleformat|titlespacing", re.I)  # also blocks restyling the headings
 _ENVIRONMENT = re.compile(r"\\(?:begin|end)\s*\{\s*([^}]*)\}")
 
 
@@ -47,7 +48,9 @@ def latex_problems(code: str) -> list[str]:
     if "^^" in code:
         problems.append("the ^^ character notation is not allowed")
     names = set(_COMMAND.findall(code)) | {n.strip().rstrip("*") for n in _ENVIRONMENT.findall(code)}
-    bad = sorted(n for n in names if n in FORBIDDEN_COMMANDS)
+    # tcolorbox options can save or load files (saveto, record, \tcbincludegraphics...): bodies use only the
+    # template's own boxes (definition, theorem, ...), never tcolorbox's commands or raw tcolorbox environment.
+    bad = sorted(n for n in names if n in FORBIDDEN_COMMANDS or _TCOLORBOX.search(n))
     if bad:
         problems.append("these commands or environments are not allowed: " + ", ".join("\\" + n for n in bad))
     return problems

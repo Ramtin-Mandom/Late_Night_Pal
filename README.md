@@ -1,6 +1,6 @@
 # Late Night Pal
 
-A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Codex (default) or the Gemini API. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate starts with one request to the selected provider, and every PDF is compiled locally with LaTeX. Nothing existing is ever overwritten.
+A desktop study sidekick that turns study PDFs into locally compiled study PDFs using Codex (default) or the Gemini API. **Current state (M3):** open a workshop (a local study folder), select PDFs across its subfolders, and generate any of eight study outputs into the folder you're viewing. Each Generate starts with one request to the selected provider, and every PDF is compiled locally with LaTeX into a colourful handout: a title banner, coloured headings, Definition / Theorem / Example / Key idea / Common mistake boxes and page citations such as [Lec/lec18.pdf, p. 3]. Nothing existing is ever overwritten.
 
 | Output type | Task | Parameters | Result in the current folder |
 | --- | --- | --- | --- |
@@ -103,7 +103,7 @@ It creates `.venv` if it's missing, installs the dependencies, runs `packaging\b
 1. Install [MiKTeX](https://miktex.org/download) and make sure `lualatex` is on PATH. Compile something once so MiKTeX finishes installing its packages and fonts before the demo.
 2. Extract the ZIP anywhere. A short path such as `C:\Demo` is safest.
 3. Set up the signed-in Codex CLI, or select **Settings → Generation method → Gemini API** and provide its key at runtime: copy `.env.example` to `.env` next to `Late Night Pal.exe` and fill in `GEMINI_API_KEY`, or set the `GEMINI_API_KEY` environment variable. A `.env` in the current working directory also works. The key is never bundled.
-4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 16 bundled resources (prompts, templates, the LaTeX read guard and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
+4. Optional preflight from PowerShell in the extracted folder: `& ".\Late Night Pal.exe" --check`. It lists the 17 bundled resources (prompts, templates and their shared style, the LaTeX read guard and the bin icon), `svg icons: ok` (Qt can draw the icon), `lualatex`, whether a key was found (never the key itself), and `frozen build: True`. `--extract <file>` prints what local conversion produces for a PDF, PPTX, DOCX, TXT or MD file.
 
 The executable is windowed. Command-line modes print to the PowerShell window they were started from.
 

@@ -178,6 +178,7 @@ def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = 
     compiler = check_runtime()["compiler"]
     tex = resource_path(f"templates/{template}.tex").read_text(encoding="utf-8")
     tex = (tex.replace("<<PACKAGES>>", preamble_packages())
+              .replace("<<STYLE>>", resource_path("templates/style.tex").read_text(encoding="utf-8"))
               .replace("<<TITLE>>", escape(one_line(document.get("title") or "Document")))
               .replace("<<SUBTITLE>>", escape(subtitle))
               .replace("<<BODY>>", document["latex_code"]))
