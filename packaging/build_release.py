@@ -1,6 +1,11 @@
 """Build the Windows handoff ZIP: dist/LateNightPal-win64.zip
 
-    .venv\\Scripts\\python packaging\\build_release.py
+    build.cmd [--close]                          one command: venv + dependencies + this script
+    .venv\\Scripts\\python packaging\\build_release.py [--close]
+
+A Late Night Pal running from dist/ locks the files PyInstaller replaces: the build stops and
+names it, or with --close first asks it to close (like clicking X). After zipping, the new exe
+runs --check from outside the checkout and the build fails if that check fails.
 
 Runs PyInstaller (one-folder), then assembles:
     Late Night Pal/
@@ -12,6 +17,7 @@ Runs PyInstaller (one-folder), then assembles:
 and refuses to ship .env files, logs, caches, recents, or the developer's key.
 """
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -74,7 +80,41 @@ def developer_key() -> bytes:
     return os.environ.get("GEMINI_API_KEY", "").encode()
 
 
+def _powershell(script: str) -> str:
+    return subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True, text=True).stdout
+
+
+def running_from_dist() -> list[int]:
+    """PIDs of programs started from dist/ (they lock files PyInstaller must replace)."""
+    prefix = str(DIST).replace("'", "''") + "\\"
+    return [int(x) for x in _powershell(
+        f"Get-Process | Where-Object {{ $_.Path -and $_.Path.StartsWith('{prefix}', "
+        "[StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.Id }").split()]
+
+
+def close_running(close: bool) -> bool:
+    pids = running_from_dist()
+    if not pids:
+        return True
+    ids = ",".join(map(str, pids))
+    if not close:
+        print(f"Late Night Pal is running from dist (PID {ids}) and locks the files the build replaces.\n"
+              "Close it, or run: build.cmd --close")
+        return False
+    _powershell(f"Get-Process -Id {ids} -ErrorAction SilentlyContinue | ForEach-Object {{ [void]$_.CloseMainWindow() }}; "
+                f"Wait-Process -Id {ids} -Timeout 20 -ErrorAction SilentlyContinue")
+    if running_from_dist():
+        print("Late Night Pal did not close (it may be busy or showing a dialog). Close it yourself and build again.")
+        return False
+    print(f"closed the running Late Night Pal (PID {ids})")
+    return True
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Build dist/Late Night Pal and dist/LateNightPal-win64.zip.")
+    parser.add_argument("--close", action="store_true", help="first close a Late Night Pal running from dist")
+    if not close_running(parser.parse_args().close):
+        return 1
     subprocess.run([sys.executable, "-m", "PyInstaller", str(ROOT / "packaging" / "late-night-workshop.spec"),
                     "--noconfirm", "--distpath", str(DIST), "--workpath", str(ROOT / "build")], check=True)
     shutil.rmtree(STAGE.parent, ignore_errors=True)
@@ -106,7 +146,15 @@ def main() -> int:
         for path in sorted(STAGE.parent.rglob("*")):
             z.write(path, path.relative_to(STAGE.parent).as_posix())
     files = sum(1 for p in STAGE.rglob("*") if p.is_file())
-    print(f"built {ZIP} ({ZIP.stat().st_size / 1e6:.1f} MB, {files} files); launch 'Late Night Pal/Late Night Pal.exe'")
+    print(f"built {ZIP} ({ZIP.stat().st_size / 1e6:.1f} MB, {files} files)")
+    exe = APP / "Late Night Pal.exe"  # checked from outside the checkout, like a double-click
+    check = subprocess.run([str(exe), "--check"], cwd=os.environ.get("SystemRoot", str(DIST)),
+                           capture_output=True, text=True)
+    print(check.stdout.rstrip() or check.stderr.rstrip())
+    if check.returncode:
+        print(f"--check FAILED (exit {check.returncode})")
+        return check.returncode
+    print(f"ready: {exe}")
     return 0
 
 

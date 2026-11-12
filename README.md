@@ -85,12 +85,13 @@ Headless checks:
 - **Name tags:** a real mouse drag renamed `scan2.txt` to `assignment_1.txt`. After closing and relaunching, the chip was restored and the next drop gave `assignment_2.txt`.
 - **Make me:** Summary of `photosynthesis-lecture.pdf` wrote `summary.pdf` in 239 s, with a temporary `.env` next to the exe that was removed afterwards.
 
-Build from the repository root (about 1½ minutes):
+Build with one command from the repository root (about 2 minutes), or double-click `build.cmd`:
 
 ```powershell
-.venv\Scripts\python -m pip install -e ".[build]"
-.venv\Scripts\python packaging\build_release.py
+.\build.cmd
 ```
+
+It creates `.venv` if it's missing, installs the dependencies, runs `packaging\build_release.py`, then runs the new exe with `--check` from `C:\Windows`; the build fails if that check fails. A Late Night Pal still open from `dist\` locks the files, so the build stops and names it: close it, or run `.\build.cmd --close` to have the build close it first (like clicking X). The manual equivalent is `.venv\Scripts\python -m pip install -e ".[build]"` and then `.venv\Scripts\python packaging\build_release.py`.
 
 - **Share:** `dist\LateNightPal-win64.zip` (about 75 MB).
 - **After extracting, launch:** `Late Night Pal\Late Night Pal.exe`. No Python installation is needed.
