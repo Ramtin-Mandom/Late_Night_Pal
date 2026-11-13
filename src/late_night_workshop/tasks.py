@@ -45,6 +45,8 @@ REPAIR_SCHEMA = {"type": "object", "required": ["latex_code"], "properties": DOC
 
 # "Use my prompt" (last in the Task list) overrides the selected task's instructions; it is not a task itself.
 CUSTOM_PROMPT_ID, CUSTOM_PROMPT_LABEL = "custom-prompt", "Use my prompt"
+# Every writer prompt has this section after the task/style (or custom) instructions and before the output rules.
+HIGH_PRIORITY_HEADING = "## High priority"
 
 
 class TaskError(AppError):
@@ -82,6 +84,12 @@ def validate_parameters(task_id: str, parameters: dict) -> dict:
         if not isinstance(text, str) or not text.strip():
             raise TaskError("invalid_parameter", "Your prompt is empty. Write what you want, then generate.")
         extra = {"custom_prompt": text.strip()}
+    if "injection" in p:  # Inject prompt: kept verbatim (braces, newlines) under ## High priority; blank = none
+        text = p["injection"]
+        if not isinstance(text, str):
+            raise TaskError("invalid_parameter", "The injected prompt must be text.")
+        if text.strip():
+            extra["injection"] = text
     if spec["output_type"] == STUDY_PLAN:
         days = p.get("days")
         if isinstance(days, bool) or not isinstance(days, int) or days < 1:
@@ -142,15 +150,19 @@ def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
                       + pdf_pages.mapping_note(s)
                       for i, s in enumerate(sources, 1))
     if params.get("custom_prompt"):  # the user's text replaces the task and style instructions; the contract stays
-        body = (f"The student's own instructions for this {spec['label']} (follow them for content, scope and "
-                f"wording):\n\n{params['custom_prompt']}")
-        style = "Required output (the app needs this to build the PDF):\n" + output_contract(task_id, params)
+        instructions = [f"The student's own instructions for this {spec['label']} (follow them for content, scope "
+                        f"and wording):\n\n{params['custom_prompt']}"]
+        output = ["Required output (the app needs this to build the PDF):\n" + output_contract(task_id, params)]
     else:
-        body = resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", "")))
-        style = resource_path("prompts/" + STYLES[params["language_style"]]).read_text(encoding="utf-8")
+        instructions = [resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", ""))).strip(),
+                        resource_path("prompts/" + STYLES[params["language_style"]]).read_text(encoding="utf-8").strip()]
+        output = []
+    # Inject prompt: always the same heading, the user's text verbatim (joined, never .format()ted), empty if unset
+    high = HIGH_PRIORITY_HEADING + ("\n\n" + params["injection"] if params.get("injection") else "")
     fmt = resource_path("prompts/format.md").read_text(encoding="utf-8").replace("{packages}", package_list())
-    return (f"You are a study assistant.\n\nAttached sources (each document is preceded by its source label):\n"
-            f"{index}\n\n{body}\n\n{style}\n\n{fmt}")
+    head = ("You are a study assistant.\n\nAttached sources (each document is preceded by its source label):\n"
+            + index)
+    return "\n\n".join([head, *instructions, high, *output, fmt])
 
 
 def resolve_task(request: dict, sources: list[dict]) -> dict:

@@ -74,6 +74,48 @@ class CustomPrompt(unittest.TestCase):
             tasks.validate_parameters("summary", {"custom_prompt": "  \n "})
 
 
+class InjectPrompt(unittest.TestCase):
+    """The writer request itself: ## High priority after the instructions, before the output rules."""
+    INJECTED = "Use {curly} braces as written.\n  Second line: f(x) = {x^2}\n"
+    BODY = r"\section{Membranes}Cells have membranes."
+
+    def writer_prompt(self, parameters):
+        with Workshop() as w:
+            result, calls, files = w.run("summary", [bundle(("summary", 0, "Cells", self.BODY))], parameters)
+        self.assertEqual(result["status"], "ok", result.get("error"))
+        self.assertEqual(files, ["summary.pdf"])
+        return calls[0]["prompt"]
+
+    def text(self, name):
+        from late_night_workshop import resource_path
+        return resource_path(name).read_text(encoding="utf-8").strip()
+
+    def test_built_in_prompt_gets_the_injection_between_style_and_format(self):
+        prompt = self.writer_prompt({"language_style": "Standard", "injection": self.INJECTED})
+        self.assertEqual(prompt.count("## High priority"), 1)
+        self.assertEqual(prompt.count(self.INJECTED), 1)
+        style_end = prompt.index(self.text("prompts/styles/standard.md")) + len(self.text("prompts/styles/standard.md"))
+        self.assertLess(prompt.index(self.text("prompts/summary.md")), style_end)
+        self.assertEqual(prompt[style_end:].index("## High priority"), 2)  # immediately after the style
+        self.assertIn("## High priority\n\n" + self.INJECTED + "\n\nShared rules for every task", prompt)
+
+        cleared = self.writer_prompt({"language_style": "Standard", "injection": ""})
+        self.assertNotIn("{curly}", cleared)
+        self.assertIn(self.text("prompts/styles/standard.md") + "\n\n## High priority\n\nShared rules for every task",
+                      cleared)  # the section stays, empty
+
+    def test_custom_prompt_gets_the_injection_before_the_output_contract(self):
+        mine = "Only the membrane parts, as a story."
+        prompt = self.writer_prompt({"language_style": "Standard", "custom_prompt": mine, "injection": self.INJECTED})
+        self.assertEqual(prompt.count("## High priority"), 1)
+        self.assertIn(mine + "\n\n## High priority\n\n" + self.INJECTED + "\n\nRequired output", prompt)
+        self.assertLess(prompt.index("Required output"), prompt.index("Shared rules for every task"))
+
+        cleared = self.writer_prompt({"language_style": "Standard", "custom_prompt": mine})
+        self.assertNotIn("{curly}", cleared)
+        self.assertIn(mine + "\n\n## High priority\n\nRequired output", cleared)
+
+
 class StaticChecks(unittest.TestCase):
     def test_forbidden_commands_and_environments(self):
         self.assertEqual(validation.latex_problems(r"\section*{A} \ce{H2O} \(x^2\) \begin{itemize}\item a\end{itemize}"), [])

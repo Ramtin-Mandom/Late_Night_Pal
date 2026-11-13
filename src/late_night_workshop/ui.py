@@ -1195,13 +1195,15 @@ def run_app() -> int:
             self.generate_btn.clicked.connect(self.generate)
 
             row = QHBoxLayout()
-            self.open_doc_btn = QPushButton("Open document")
+            # Inject prompt: extra instructions for this form, sent under ## High priority; checked = one is set
+            self.injection = ""
+            self.inject_btn = decorate(QPushButton("Inject prompt"), "notes")
+            self.inject_btn.setCheckable(True)
+            self.inject_btn.clicked.connect(self.edit_injection)
             self.open_folder_btn = QPushButton("Open output folder")
-            self.open_doc_btn.clicked.connect(self.open_document)
             self.open_folder_btn.clicked.connect(self.open_output_folder)
-            decorate(self.open_doc_btn, "notes")
             decorate(self.open_folder_btn, "folder")
-            row.addWidget(self.open_doc_btn)
+            row.addWidget(self.inject_btn)
             row.addWidget(self.open_folder_btn)
             self.retry_history_btn = QPushButton("Retry saving history")
             self.retry_history_btn.setToolTip("Save the History entry again. The PDFs are already saved; "
@@ -2039,7 +2041,8 @@ def run_app() -> int:
             for action, b in self.action_btns.items():
                 b.setEnabled(not busy)
             self.update_bin_buttons()
-            self.open_doc_btn.setEnabled(bool(self.last_paths))
+            self.inject_btn.setVisible(self.mode_stack.currentIndex() == 1)
+            self.inject_btn.setEnabled(not busy)
             self.open_folder_btn.setEnabled(bool(self.last_paths))
             self.count_selected_pages()
             self.render_reuse()
@@ -2590,6 +2593,8 @@ def run_app() -> int:
                 if text is None:
                     return  # Cancel: form and selections untouched, no provider call
                 parameters["custom_prompt"] = text
+            if self.injection:
+                parameters["injection"] = self.injection  # captured now; later edits don't touch this job
             request = build_request(self.state, self.current_task_id(), parameters,
                                     self.provider == "codex" or self.efficient_box.isChecked(), self.provider)
             try:  # Days / Folder name / style checked before any work
@@ -2658,9 +2663,39 @@ def run_app() -> int:
             if self.state:
                 self.refresh()  # show the new file; selection is unchanged either way
 
-        def open_document(self):
-            if self.last_paths:
-                QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_paths[0]))
+        def set_injection(self, text: str):
+            """Apply from the editor: blank clears. The button shows it is set (checked style and label)."""
+            self.injection = text if text.strip() else ""
+            on = bool(self.injection)
+            self.inject_btn.setChecked(on)
+            self.inject_btn.setText("Inject prompt · on" if on else "Inject prompt")
+            self.inject_btn.setToolTip("Extra instructions are set; they go under High priority. Click to edit or clear."
+                                       if on else "Add extra instructions for the next Generate.")
+
+        def edit_injection(self):
+            """Multiline editor; Apply saves (empty clears), Cancel keeps the previous value."""
+            self.inject_btn.setChecked(bool(self.injection))  # a click toggles a checkable button; undo that
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Inject prompt")
+            dialog.resize(560, 320)
+            lay = QVBoxLayout(dialog)
+            lbl = QLabel("Extra instructions, sent with high priority on top of the task's own. "
+                         "Leave empty and Apply to clear.")
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+            editor = QPlainTextEdit(self.injection)
+            editor.setAccessibleName("Injected prompt")
+            lay.addWidget(editor, 1)
+            buttons = QDialogButtonBox()
+            buttons.addButton("Apply", QDialogButtonBox.AcceptRole)
+            buttons.addButton(QDialogButtonBox.Cancel)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            lay.addWidget(buttons)
+            self.inject_dialog = dialog  # reachable for UI tests
+            editor.setFocus()
+            if dialog.exec() == QDialog.Accepted:
+                self.set_injection(editor.toPlainText())
 
         def open_output_folder(self):
             if self.last_paths:
