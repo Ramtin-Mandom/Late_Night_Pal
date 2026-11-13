@@ -187,6 +187,8 @@ def describe_download(record: dict) -> str:
     p = Path(record["path"])
     return f"{p.name}   ·   {p.parent}   ·   {time.strftime('%H:%M', time.localtime(record['downloaded_at']))}"
 ACTION_VERB = {"move": "Move", "rename": "Name tag", "wrap": "Wrap", "super_wrap": "Super Wrap", "rip": "Rip", "delete": "Delete", "paste": "Paste", "copy": "Copy"}
+CACHE_NOTE = ("Saves each PDF's prepared text (extracted and read from page images) as Markdown in the workshop's "
+              "cache folder. Matching cached Markdown is always reused, so later jobs skip that work.")
 EFFICIENT_NOTE = ("Converts files to text before sending them to Gemini. This can be much cheaper for some files, "
                   "but diagrams, equations, tables, and formatting may be lost.")
 
@@ -229,7 +231,7 @@ def describe_error(error: dict) -> str:
 
 
 def build_request(state: dict, task_id: str = "summary", parameters: dict | None = None,
-                  efficient: bool = False, provider: str = "codex") -> dict:
+                  efficient: bool = False, provider: str = "codex", cache: bool = False) -> dict:
     """Snapshot taken at Generate time; later browsing cannot change it."""
     return {
         "workshop_root": str(state["root"]),
@@ -239,6 +241,7 @@ def build_request(state: dict, task_id: str = "summary", parameters: dict | None
         "task_id": task_id,
         "parameters": dict(parameters or {}),
         "efficient": bool(efficient),
+        "cache": bool(cache),  # Make me's Cache box at the click: may this job write <root>/cache?
         "page_selections": page_selections(state),
     }
 
@@ -1180,6 +1183,13 @@ def run_app() -> int:
             self.efficient_note.setProperty("role", "support")
             right.addWidget(self.efficient_box)
             right.addWidget(self.efficient_note)
+            self.cache_box = QCheckBox("Cache")
+            self.cache_box.setChecked(False)
+            self.cache_note = QLabel(CACHE_NOTE)
+            self.cache_note.setWordWrap(True)
+            self.cache_note.setProperty("role", "support")
+            right.addWidget(self.cache_box)
+            right.addWidget(self.cache_note)
             self.output_type.currentTextChanged.connect(self.output_type_changed)
             self.task_box.currentIndexChanged.connect(self.task_changed)
             self.output_type.setCurrentText(tasks.SINGLE_FILE)
@@ -2598,7 +2608,8 @@ def run_app() -> int:
             if self.injection:
                 parameters["injection"] = self.injection  # captured now; later edits don't touch this job
             request = build_request(self.state, self.current_task_id(), parameters,
-                                    self.provider == "codex" or self.efficient_box.isChecked(), self.provider)
+                                    self.provider == "codex" or self.efficient_box.isChecked(), self.provider,
+                                    self.cache_box.isChecked())
             try:  # Days / Folder name / style checked before any work
                 tasks.validate_parameters(request["task_id"], request["parameters"])
             except tasks.TaskError as e:

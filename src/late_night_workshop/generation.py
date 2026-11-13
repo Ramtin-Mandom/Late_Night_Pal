@@ -31,7 +31,7 @@ from datetime import date
 from pathlib import Path
 
 from . import (AppError, codex_client, costs, gemini_client, history, inputs, outputs, parallel_guide, rendering,
-               tasks, validation, workshops)
+               tasks, validation, workshop_cache, workshops)
 
 
 class RequestError(AppError):
@@ -178,6 +178,38 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
             progress("generating", f"Network problem while {label}; retrying once...")
             return timed(f"{method}_s", fn, task, sources)
 
+    def prepared_text(sources, persist, root):
+        """Codex: read scanned pages now (Luna), so the text is final before any writer call; then, with Cache
+        checked, publish each PDF's newly prepared pages to <root>/cache. A failed save never fails the job."""
+        stubbed = "generate_content" in (deps or {})  # tests that stub the provider never read scans
+        if method == "codex" and not stubbed and any(s.get("image_parts") for s in sources):
+            n = sum(len(s["image_parts"]) for s in sources)
+            progress("preparing", f"Reading {n} scanned page{'s' * (n != 1)} with Codex...")
+            executable = codex_client.find_cli()
+            if not executable:
+                raise codex_client.CodexError("codex_missing", "Install the Codex CLI on PATH, run codex login, "
+                                                               "then restart Late Night Pal.")
+            sources = timed(f"{method}_s", codex_client.read_scans, executable, sources, persist)
+        if not persist:
+            return sources
+        for s in sources:
+            pending = {im["page"] for im in s.get("image_parts") or []}  # never cache an unread scan
+            units = {u.get("number"): u["text"] for u in s.get("text_parts") or []}
+            done = set(s.get("transcribed_pages") or [])
+            fresh = {n: {"text": units[n], "kind": "transcribed" if n in done else "text"}
+                     for n in s.get("fresh_pages") or {} if n not in pending and n in units}
+            if not fresh:
+                continue
+            try:
+                md = workshop_cache.publish(root, s["source_id"], s["fingerprint"],
+                                            s["page_count"], fresh)
+                progress("preparing", f"Saved {len(fresh)} page(s) of {s['source_id']} to "
+                                      f"{Path(md).relative_to(Path(root)).as_posix()}.")
+            except OSError as e:
+                progress("preparing", f"Couldn't save {s['source_id']} to the workshop cache "
+                                      f"({e.strerror or e}); continuing without it.")
+        return sources
+
     def first_request(task, sources):
         """Complete guide: parallel Codex calls (parallel_guide); every other task, and every repair: one request."""
         if task.get("parallel") and "generate_content" not in (deps or {}):
@@ -284,8 +316,10 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         if efficient:
             progress("preparing", "Converting files to text locally...")
         selections = page_choices(request, checked["paths"])
+        persist = bool(request.get("cache", False))  # Make me's Cache box: may this job write caches?
         prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps,
-                                     page_selections=selections, payload_dir=payload_dir)
+                                     page_selections=selections, payload_dir=payload_dir,
+                                     cache_root=checked["root"], persist=persist)
         if prep["decisions"]:
             # Scan / no-text files: the student must choose before anything is sent.
             progress("awaiting_input", "Waiting for your choice about " +
@@ -296,12 +330,13 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
                 return {"status": "cancelled", "timings": timings}
             prep = inputs.prepare_inputs(checked["root"], checked["paths"], efficient, caps,
                                          original_overrides=frozenset(pending), page_selections=selections,
-                                         payload_dir=payload_dir)
+                                         payload_dir=payload_dir, cache_root=checked["root"], persist=persist)
             if prep["decisions"]:
                 raise RequestError("needs_original", "Some files still need a decision.")
         sources = prep["sources"]
         for w in prep["warnings"]:
             progress("preparing", w["message"])
+        sources = prepared_text(sources, persist, checked["root"])
         task = tasks.resolve_task(request, sources)
         subtitle = _subtitle(sources)
 

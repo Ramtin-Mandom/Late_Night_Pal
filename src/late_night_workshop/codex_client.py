@@ -138,8 +138,9 @@ def _cached(source, page):
         return None
 
 
-def _transcribe(executable, source, image) -> str:
-    """Markdown of one scanned page; an empty or unreadable answer is asked once more. Cached only when checked."""
+def _transcribe(executable, source, image, persist: bool = True) -> str:
+    """Markdown of one scanned page; an empty or unreadable answer is asked once more. Cached only when checked,
+    and only with persist (Make me's Cache box); unchecked jobs never write a new transcription."""
     prompt = READER_PROMPT.format(page=image["page"], source=source["source_id"])
     text = None
     for _ in range(2):
@@ -154,6 +155,8 @@ def _transcribe(executable, source, image) -> str:
         raise CodexError("codex_failed", f"Codex returned an unreadable transcription of page {image['page']} of "
                          f"{source['source_id']}. Generate again.", source_id=source["source_id"])
     text = text or "[no readable content]"  # a blank page, twice
+    if not persist:
+        return text
     try:
         cache = _cache_file(source, image["page"])
         cache.parent.mkdir(parents=True, exist_ok=True)
@@ -163,8 +166,9 @@ def _transcribe(executable, source, image) -> str:
     return text
 
 
-def read_scans(executable, sources) -> list[dict]:
-    """Sources with their scanned pages as transcribed text and no image_parts (new dicts)."""
+def read_scans(executable, sources, persist: bool = True) -> list[dict]:
+    """Sources with their scanned pages as transcribed text and no image_parts (new dicts).
+    transcribed_pages keeps pages that came transcribed from the workshop cache and adds the ones read now."""
     pages = {i: {} for i in range(len(sources))}
     todo = []
     for i, source in enumerate(sources):
@@ -176,7 +180,7 @@ def read_scans(executable, sources) -> list[dict]:
                 pages[i][im["page"]] = text
     if todo:
         with ThreadPoolExecutor(max_workers=min(READER_WORKERS, len(todo))) as pool:
-            futures = [(i, im["page"], pool.submit(_transcribe, executable, sources[i], im)) for i, im in todo]
+            futures = [(i, im["page"], pool.submit(_transcribe, executable, sources[i], im, persist)) for i, im in todo]
             for i, page, future in futures:
                 pages[i][page] = future.result()
     result = []
@@ -195,7 +199,8 @@ def read_scans(executable, sources) -> list[dict]:
         units += [{"unit": "page", "number": n, "text": "(transcribed from the page image)\n" + t}
                   for n, t in sorted(pages[i].items()) if n not in seen]
         units.sort(key=lambda u: u.get("number") or 0)
-        result.append(dict(source, text_parts=units, image_parts=[], transcribed_pages=sorted(pages[i])))
+        result.append(dict(source, text_parts=units, image_parts=[],
+                           transcribed_pages=sorted(set(source.get("transcribed_pages") or []) | set(pages[i]))))
     return result
 
 

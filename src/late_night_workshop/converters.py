@@ -96,7 +96,8 @@ def _cache_file(data: bytes, converter: str) -> Path:
     return app_data_dir() / "conversions" / f"{key}.json"
 
 
-def convert(path, data: bytes) -> dict:
+def convert(path, data: bytes, persist: bool = True) -> dict:
+    """persist=False (Make me's Cache unchecked) reads the cache but never writes a new conversion."""
     path = Path(path)
     name, fn = CONVERTERS[path.suffix.lower()]
     cache = _cache_file(data, name)
@@ -112,7 +113,7 @@ def convert(path, data: bytes) -> dict:
         raise ConversionError(e.code, f"{path.name} {e.message}")
     except Exception as e:  # corrupt or password-protected files
         raise ConversionError("conversion_failed", f"Could not read text from {path.name} ({type(e).__name__}).")
-    if any(u["text"].strip() for u in units):  # never cache an empty/failed conversion
+    if persist and any(u["text"].strip() for u in units):  # never cache an empty/failed conversion
         try:
             cache.parent.mkdir(parents=True, exist_ok=True)
             cache.write_text(json.dumps({"converter": name, "version": CONVERTER_VERSION, "units": units}),

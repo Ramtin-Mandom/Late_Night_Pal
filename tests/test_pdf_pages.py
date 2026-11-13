@@ -81,7 +81,7 @@ class Pages(unittest.TestCase):
             os.environ["LOCALAPPDATA"] = self.old_appdata
         self.tmp.cleanup()
 
-    def run_job(self, paths, pages=None, efficient=False, decide=None, before_send=None):
+    def run_job(self, paths, pages=None, efficient=False, decide=None, before_send=None, cache=False):
         """Generate with a stub client; the stub builds the real transmitted items (_source_items)."""
         first = []
 
@@ -97,7 +97,7 @@ class Pages(unittest.TestCase):
 
         request = {"provider": "gemini", "workshop_root": str(self.root), "destination": str(self.root / "Revision"),
                    "selected_paths": [str(p) for p in paths], "task_id": "summary",
-                   "parameters": {"language_style": "Standard"}, "efficient": efficient}
+                   "parameters": {"language_style": "Standard"}, "efficient": efficient, "cache": cache}
         if pages is not None:
             request["page_selections"] = pages
         return generation.generate(request, deps={"generate_content": fake, "check_runtime": lambda: None},
@@ -164,7 +164,7 @@ class Pages(unittest.TestCase):
 
     # ---------- efficient mode, scans, cache ----------
     def test_efficient_mode_filters_units_and_cache_serves_two_selections(self):
-        self.run_job([self.pdf, self.txt], {str(self.pdf): [1, 3, 4]}, efficient=True)
+        self.run_job([self.pdf, self.txt], {str(self.pdf): [1, 3, 4]}, efficient=True, cache=True)  # Cache ticked
         self.assertEqual([s["source_id"] for s in self.sent[0]["sources"]], ["Lectures/extra.txt", "Lectures/notes.pdf"])
         src = self.sent[0]["sources"][1]
         self.assertEqual([u["number"] for u in src["text_parts"]], [1, 3, 4])
@@ -173,7 +173,7 @@ class Pages(unittest.TestCase):
         self.assertIn("[Lectures/notes.pdf - page 3]", text)
         self.assertNotIn(page_text(2), text)
         self.assertIn("Plain text notes about cells.", self.sent[0]["items"][0]["text"])  # mixed request still works
-        self.run_job([self.pdf], {str(self.pdf): [2, 5]}, efficient=True)
+        self.run_job([self.pdf], {str(self.pdf): [2, 5]}, efficient=True, cache=True)
         again = self.sent[1]["sources"][0]
         self.assertEqual(again["cache"], "hit")
         self.assertEqual([u["number"] for u in again["text_parts"]], [2, 5])

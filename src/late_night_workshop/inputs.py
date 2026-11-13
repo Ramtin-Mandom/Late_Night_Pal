@@ -17,6 +17,13 @@ Routing
                   transcribes them before generating).
 original_overrides holds source IDs the student approved for "Process original" in this job.
 
+Workshop cache (workshop_cache.py): with cache_root, a PDF in text mode first takes every requested page
+from <root>/cache/<path>.md that is valid for these exact file contents (no extraction, no images for those
+pages); only the remaining pages are extracted and checked for little text, and only their scans become
+image_parts. The record lists cache_hit_pages and fresh_pages ({page: "text"}) so generation can publish
+the new pages after Luna. persist=False (Cache unchecked) also stops the per-user conversion cache from
+writing.
+
 PDF page choices (P3-M2): page_selections maps a selected PDF's canonical path to None (All pages)
 or a list of original page numbers. Each PDF is inspected first (encrypted/unreadable PDFs fail
 here, before any API call) and the choice is checked against its page count. Original mode then
@@ -31,7 +38,7 @@ import mimetypes
 import os
 from pathlib import Path
 
-from . import AppError, converters, pdf_pages
+from . import AppError, converters, pdf_pages, workshop_cache
 from .workshops import relative
 
 MIME = {
@@ -79,12 +86,22 @@ def _low_text_units(ext: str, units: list[dict]) -> list:
     return [] if any(u["text"].strip() for u in units) else [None]
 
 
+def _merge(cached: list[dict], extracted: list[dict]) -> list[dict]:
+    """Cached and newly extracted page units in page order."""
+    return sorted(cached + extracted, key=lambda u: u.get("number") or 0)
+
+
+def _cache_label(root, source_id) -> str:
+    return Path(workshop_cache.entry_path(root, source_id)).relative_to(Path(root)).as_posix()
+
+
 def _export_hint(ext: str) -> str:
     return "Export it as a text-based PDF, DOCX or TXT and select that file instead."
 
 
 def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=None,
-                   original_overrides=frozenset(), page_selections=None, payload_dir=None) -> dict:
+                   original_overrides=frozenset(), page_selections=None, payload_dir=None,
+                   cache_root=None, persist: bool = True) -> dict:
     if not selected_paths:
         raise InputError("no_inputs", "Select at least one file first.")
     originals_ok = set((capabilities or {}).get("original_mime_types", [MIME[".pdf"]]))
@@ -129,26 +146,46 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
         if not converters.supported(path):
             raise InputError("unsupported_input", f"{source_id}: this file type can't be sent to the selected provider or "
                              f"converted locally. {_export_hint(ext)}", source_id=source_id)
-        try:
-            conv = converters.convert(path, data)
-        except converters.ConversionError as e:
-            raise InputError(e.code, f"{source_id}: {e.message}", source_id=source_id)
+        hits = {}
+        if ext == ".pdf" and cache_root is not None:
+            wanted = pages or list(range(1, record["page_count"] + 1))
+            hits = {n: e for n, e in workshop_cache.lookup(cache_root, source_id, record["fingerprint"],
+                                                           record["page_count"]).items() if n in wanted}
+            record.update(cache_entry=str(workshop_cache.entry_path(cache_root, source_id)),
+                          cache_hit_pages=sorted(hits), fresh_pages={})
+        if hits and len(hits) == len(wanted):
+            conv = {"units": [], "cache": "workshop"}  # every requested page is cached: nothing to extract
+        else:
+            try:
+                conv = converters.convert(path, data, persist)
+            except converters.ConversionError as e:
+                raise InputError(e.code, f"{source_id}: {e.message}", source_id=source_id)
         units = conv["units"]
         if pages:
-            wanted = set(pages)
-            units = [u for u in units if u["unit"] == "page" and u["number"] in wanted]  # cache stays full-file
-        low = _low_text_units(ext, units)
+            wanted_set = set(pages)
+            units = [u for u in units if u["unit"] == "page" and u["number"] in wanted_set]  # cache stays full-file
+        if hits:
+            units = [u for u in units if u.get("number") not in hits]
+        if ext == ".pdf" and cache_root is not None:
+            record["fresh_pages"] = {u["number"]: "text" for u in units}
+        low = _low_text_units(ext, units) if units or not hits else []
+        cached_units = [{"unit": "page", "number": n, "text": hits[n]["text"]} for n in sorted(hits)]
+        if hits:
+            record["transcribed_pages"] = sorted(n for n, e in hits.items() if e["kind"] == "transcribed")
+            warnings.append({"code": "workshop_cache", "source_id": source_id,
+                             "message": f"{source_id}: reused {len(hits)} page(s) from the workshop cache "
+                                        f"({_cache_label(cache_root, source_id)})."})
         if low and ext == ".pdf" and (capabilities or {}).get("scan_images"):
             # Image-capable provider without PDF input (Codex): attach each little-text page as a picture.
             scanned = [u["number"] for u in units if len("".join(u["text"].split())) < MIN_CHARS_PER_PAGE] \
-                or pages or list(range(1, record["page_count"] + 1))
+                or [u["number"] for u in units]  # low on average: read every page not already cached
             if payload_dir is None:
                 raise InputError("no_payload_dir", "Internal error: no job folder for the scanned pages.")
             try:
                 images = pdf_pages.write_page_images(path, scanned, payload_dir, f"source-{index:03d}", data)
             except pdf_pages.PageError as e:
                 raise InputError(e.code, e.message.replace(path.name, source_id, 1), source_id=source_id)
-            record.update(mode="text", text_parts=units, cache=conv["cache"], image_parts=images)
+            record.update(mode="text", text_parts=_merge(cached_units, units), cache=conv["cache"], image_parts=images)
             warnings.append({"code": "scan_images", "source_id": source_id,
                              "message": f"{source_id}: {len(scanned)} page(s) with little or no text will be read from page images."})
             sources.append(record)
@@ -166,7 +203,7 @@ def prepare_inputs(root, selected_paths, efficient: bool = False, capabilities=N
                                  "Settings to send the original PDF, or use an OCR copy.", source_id=source_id)
             raise InputError("unsupported_input", f"{source_id}: no usable text could be extracted, and the selected provider "
                              f"can't take this file type as an original. {_export_hint(ext)}", source_id=source_id)
-        record.update(mode="text", text_parts=units, cache=conv["cache"])
+        record.update(mode="text", text_parts=_merge(cached_units, units), cache=conv["cache"])
         if not efficient and ext not in PASS_THROUGH:
             warnings.append({"code": "converted_locally", "source_id": source_id,
                              "message": f"{source_id} was converted to text locally (the selected provider doesn't accept "
