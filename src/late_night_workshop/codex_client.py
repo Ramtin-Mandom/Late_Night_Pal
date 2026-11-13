@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -64,13 +65,40 @@ def find_cli():
     return max(candidates, key=lambda path: path.stat().st_mtime, default=None)
 
 
+_usage, _usage_lock = [], threading.Lock()
+
+
+def take_usage() -> list[dict]:
+    """Token usage of every Codex call since the last take: [{model, input, cached, output}]; clears it.
+    Generation takes it at the start and end of a job (one job runs at a time)."""
+    with _usage_lock:
+        records, _usage[:] = list(_usage), []
+    return records
+
+
+def _record_usage(model: str, stdout: bytes) -> None:
+    """The --json event stream ends each turn with turn.completed {usage}; keep its token counts."""
+    for line in (stdout or b"").decode("utf-8", "replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "turn.completed":
+            u = event.get("usage") or {}
+            with _usage_lock:
+                _usage.append({"model": model, "input": int(u.get("input_tokens") or 0),
+                               "cached": int(u.get("cached_input_tokens") or 0),
+                               "output": int(u.get("output_tokens") or 0)})
+
+
 def run_codex(executable, prompt, schema, model, effort, images=()) -> str:
-    """One fresh read-only `codex exec` with a JSON schema; returns its raw JSON answer."""
+    """One fresh read-only `codex exec` with a JSON schema; returns its raw JSON answer.
+    Its --json events give the call's token usage, recorded for take_usage()."""
     with tempfile.TemporaryDirectory(prefix="lnp_codex_") as folder:
         schema_file = Path(folder, "schema.json")
         output = Path(folder, "answer.json")
         schema_file.write_text(json.dumps(strict_schema(schema)), encoding="utf-8")
-        command = [executable, "-a", "never", "exec", "--sandbox", "read-only", "--ephemeral",
+        command = [executable, "-a", "never", "exec", "--json", "--sandbox", "read-only", "--ephemeral",
                    "-c", 'forced_login_method="chatgpt"', "--skip-git-repo-check", "--ignore-user-config",
                    "--disable", "shell_tool", "-c", 'web_search="disabled"',
                    "-m", model, "-c", f'model_reasoning_effort="{effort}"']
@@ -79,10 +107,11 @@ def run_codex(executable, prompt, schema, model, effort, images=()) -> str:
         command += ["--output-schema", str(schema_file), "-o", str(output), "-"]
         try:
             run = subprocess.run(command, cwd=folder, input=prompt.encode("utf-8"),
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=900,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=900,
                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired:
             raise CodexError("codex_timeout", "Codex timed out. Try fewer files or fewer days.") from None
+        _record_usage(model, run.stdout)
         if run.returncode:
             diagnostic = run.stderr.lower()
             if any(word in diagnostic for word in (b"401", b"unauthorized", b"not logged in", b"sign in")):

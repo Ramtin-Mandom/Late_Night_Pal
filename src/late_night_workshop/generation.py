@@ -30,7 +30,8 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import AppError, codex_client, gemini_client, history, inputs, outputs, rendering, tasks, validation, workshops
+from . import (AppError, codex_client, costs, gemini_client, history, inputs, outputs, parallel_guide, rendering,
+               tasks, validation, workshops)
 
 
 class RequestError(AppError):
@@ -134,9 +135,17 @@ def page_choices(request: dict, paths) -> dict:
 
 def generate(request: dict, on_progress=lambda event: None, deps: dict | None = None,
              decide_inputs=None) -> dict:
-    """decide_inputs(decisions) -> {source_id: "process_original" | "cancel"}; missing means cancel."""
+    """decide_inputs(decisions) -> {source_id: "process_original" | "cancel"}; missing means cancel.
+    Every result also carries "usage" (costs.summarize: time, Codex calls, tokens, estimated cost) and
+    "run_summary", its one-line description for the status line."""
+    codex_client.take_usage()  # drop anything left over from an earlier job
+    start = time.perf_counter()
     with tempfile.TemporaryDirectory(prefix="lnp_inputs_", ignore_cleanup_errors=True) as payload_dir:
-        return _generate(request, on_progress, deps, decide_inputs, payload_dir)
+        result = _generate(request, on_progress, deps, decide_inputs, payload_dir)
+    result["usage"] = costs.summarize(codex_client.take_usage(), time.perf_counter() - start)
+    result["run_summary"] = costs.describe(result["usage"],
+                                           "Gemini" if request.get("provider") == "gemini" else "Codex")
+    return result
 
 
 def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
@@ -158,15 +167,23 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         finally:
             timings[key] = round(timings.get(key, 0) + time.perf_counter() - start, 1)
 
-    def ask_provider(task, sources, label):
+    def ask_provider(task, sources, label, fn=None):
         """One request, plus at most one visible retry for a transient network failure."""
+        fn = fn or generate_content
         try:
-            return timed(f"{method}_s", generate_content, task, sources)
+            return timed(f"{method}_s", fn, task, sources)
         except AppError as e:
             if e.code != "api_network":
                 raise
             progress("generating", f"Network problem while {label}; retrying once...")
-            return timed(f"{method}_s", generate_content, task, sources)
+            return timed(f"{method}_s", fn, task, sources)
+
+    def first_request(task, sources):
+        """Complete guide: parallel Codex calls (parallel_guide); every other task, and every repair: one request."""
+        if task.get("parallel") and "generate_content" not in (deps or {}):
+            return ask_provider(task, sources, "generating", lambda t, s: parallel_guide.generate(
+                t, s, lambda message: progress("generating", message)))
+        return ask_provider(task, sources, "generating")
 
     def validated(task, sources, response):
         """Validate; on failure send one visible schema-repair request, then give up."""
@@ -252,6 +269,9 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         if method not in ("codex", "gemini"):
             raise RequestError("invalid_parameter", "Choose Codex or Gemini API in Settings.")
         tasks.validate_parameters(request.get("task_id"), request.get("parameters"))  # before any work
+        if tasks.TASKS[request["task_id"]].get("parallel") and method != "codex":
+            raise RequestError("invalid_parameter", "Complete guide is written by Codex. Choose Settings → "
+                                                    "Generation method → Codex, or pick Notes.")
         if not request.get("selected_paths"):
             raise RequestError("no_inputs", "Select at least one PDF first.")
         checked = workshops.validate_paths(request["workshop_root"], request["destination"], request["selected_paths"])
@@ -286,7 +306,7 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         subtitle = _subtitle(sources)
 
         progress("generating", f"{task['label']}: sending {len(sources)} file(s) to {provider}...")
-        response = ask_provider(task, sources, "generating")
+        response = first_request(task, sources)
         progress("validating", f"Checking {provider}'s response...")
         bundle = validated(task, sources, response)
         names = outputs.relative_output_paths(task, bundle["documents"])

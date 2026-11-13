@@ -40,11 +40,11 @@ def _invalid(msg: str):
     return ValidationError("invalid_response", f"The provider returned an unusable response: {msg}", retryable=True)
 
 
-def latex_problems(code: str) -> list[str]:
+def latex_problems(code: str, max_chars: int = MAX_LATEX_CHARS) -> list[str]:
     """Static safety check of one document body; [] when it may be compiled."""
     problems = []
-    if len(code) > MAX_LATEX_CHARS:
-        problems.append(f"latex_code is longer than {MAX_LATEX_CHARS} characters")
+    if len(code) > max_chars:
+        problems.append(f"latex_code is longer than {max_chars} characters")
     if "^^" in code:
         problems.append("the ^^ character notation is not allowed")
     names = set(_COMMAND.findall(code)) | {n.strip().rstrip("*") for n in _ENVIRONMENT.findall(code)}
@@ -65,7 +65,7 @@ def plain(code: str) -> str:
 
 def document_problems(doc: dict, task: dict, sources: list[dict]) -> list[str]:
     """Per-document checks before compiling; each problem is phrased for Gemini to fix."""
-    problems = latex_problems(doc["latex_code"])
+    problems = latex_problems(doc["latex_code"], task.get("max_latex_chars") or MAX_LATEX_CHARS)
     text = plain(doc["latex_code"])
     if doc["role"] == "schedule" and task["layout"]["kind"] == "schedule":
         missing = [n for n in task["expected"]["days"] if not re.search(rf"\bDay\s*~?0*{n}\b", text, re.I)]

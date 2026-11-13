@@ -141,6 +141,8 @@ def describe_saved(result: dict) -> str:
                  + ("\nUse Retry saving history; generation will not run again." if h.get("record") else ""))
     if result.get("warnings"):
         text += "\n" + "\n".join(w["message"] for w in result["warnings"])
+    if result.get("run_summary"):
+        text += "\n" + result["run_summary"]
     return text
 
 

@@ -1,4 +1,4 @@
-"""Task registry: the eight task IDs, their prompts, parameters, expected roles and layouts.
+"""Task registry: the nine task IDs, their prompts, parameters, expected roles and layouts.
 
 resolve_task(request, sources) -> task dict consumed by the client, validator,
 renderer and publisher. Model output never chooses filenames; layouts here do.
@@ -26,6 +26,10 @@ TASKS = {
                   "roles": ["checklist"], "layout": {"kind": "single", "filename": "checklist.pdf"}},
     "notes": {"label": "Notes", "output_type": SINGLE_FILE, "prompt_file": "prompts/notes.md",
               "roles": ["notes"], "layout": {"kind": "single", "filename": "notes.pdf"}},
+    # Written by several Codex calls at once from one plan (parallel_guide.py); Codex only.
+    "complete-guide": {"label": "Complete guide", "output_type": SINGLE_FILE, "prompt_file": "prompts/notes.md",
+                       "roles": ["notes"], "layout": {"kind": "single", "filename": "complete-guide.pdf"},
+                       "parallel": True, "max_latex_chars": 1_500_000},
     "summary": {"label": "Summary", "output_type": SINGLE_FILE, "prompt_file": "prompts/summary.md",
                 "roles": ["summary"], "layout": {"kind": "single", "filename": "summary.pdf"}},
     "answer-key": {"label": "Answer key", "output_type": SINGLE_FILE, "prompt_file": "prompts/answer-key.md",
@@ -188,4 +192,6 @@ def resolve_task(request: dict, sources: list[dict]) -> dict:
         "layout": layout,
         "template": spec.get("template", "document"),
         "max_pages": spec.get("max_pages"),
+        "parallel": spec.get("parallel", False),
+        "max_latex_chars": spec.get("max_latex_chars"),
     }

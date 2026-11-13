@@ -101,6 +101,12 @@ Nothing is published until every document has validated and compiled, and the te
 - **Retry** from the same window: the full bundle lands in the next free folder, for example `Daily Study Plan (2)/` with all six PDFs, while an existing `Daily Study Plan/` stays byte-for-byte unchanged.
 - **Network error:** one automatic retry, shown as `Network problem while generating; retrying once...`. Quota, auth and size-limit errors aren't retried; they show what to fix (for example `Wait a minute, then click Generate again.`).
 
+## 4b. Complete guide (Codex)
+
+Select the three `Sample_pdf` lectures, choose **Single file → Complete guide** and click **Generate**. The status shows `Complete guide: planning 7 parts from 160 pages...` (one Luna call, about 1 minute), `Complete guide: writing 7 parts at once...`, then `1 of 7 parts written...` up to `7 of 7`, and `checking each part...`. A part that fails its own compile is named with its problem, for example `the section on Expectation and LOTUS has a problem (! Undefined control sequence); asking Codex once to fix it...`. Then the usual compile, layout fix and save: `complete-guide.pdf` in the Save to folder. With **Settings → Generation method → Gemini API** the job stops at once with `Complete guide is written by Codex…`.
+
+After every successful Generate the status ends with a line like `Took 6 min 0 s · 10 Codex calls · 246K tokens in (82K cached), 54K out · about $0.38 at API prices` (Gemini: `Took 2 min 5 s · token use not reported by Gemini`).
+
 ## 5. Efficient, mixed formats and scans
 
 Example selection: `Lectures/topic.pdf` (2 text pages), `Readings/topic.pdf`, `Slides/deck.pptx` (2 slides).

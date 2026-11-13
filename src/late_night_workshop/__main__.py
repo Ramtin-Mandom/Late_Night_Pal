@@ -101,6 +101,7 @@ def main() -> int:
         )
         if result["status"] == "ok":
             print(result["paths"][0])
+            print(result["run_summary"].replace(" · ", " | "))  # Windows consoles can't show the middle dot
             return 0
         if result["status"] == "cancelled":
             print("Cancelled during input preparation.", file=sys.stderr)
