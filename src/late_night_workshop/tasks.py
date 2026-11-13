@@ -43,6 +43,10 @@ DOCUMENT_SCHEMA_PROPERTIES = {"latex_code": {"type": "string"}}
 REPAIR_SCHEMA = {"type": "object", "required": ["latex_code"], "properties": DOCUMENT_SCHEMA_PROPERTIES}
 
 
+# "Use my prompt" (last in the Task list) overrides the selected task's instructions; it is not a task itself.
+CUSTOM_PROMPT_ID, CUSTOM_PROMPT_LABEL = "custom-prompt", "Use my prompt"
+
+
 class TaskError(AppError):
     stage = "validating"
 
@@ -72,16 +76,22 @@ def validate_parameters(task_id: str, parameters: dict) -> dict:
     if not spec:
         raise TaskError("invalid_task", f"Unknown task '{task_id}'.")
     p = parameters or {}
+    extra = {}
+    if "custom_prompt" in p:  # Use my prompt: replaces the task and style instructions sent to the writer
+        text = p["custom_prompt"]
+        if not isinstance(text, str) or not text.strip():
+            raise TaskError("invalid_parameter", "Your prompt is empty. Write what you want, then generate.")
+        extra = {"custom_prompt": text.strip()}
     if spec["output_type"] == STUDY_PLAN:
         days = p.get("days")
         if isinstance(days, bool) or not isinstance(days, int) or days < 1:
             raise TaskError("invalid_parameter", "Days must be a positive whole number (1 or more).")
         return {"days": days, "folder_name": safe_folder_name(p.get("folder_name", ""), spec["default_folder"]),
-                "language_style": DEFAULT_STYLE}
+                "language_style": DEFAULT_STYLE, **extra}
     style = p.get("language_style") or DEFAULT_STYLE
     if style not in STYLES:
         raise TaskError("invalid_parameter", f"Unknown language style '{style}'.")
-    return {"language_style": style}
+    return {"language_style": style, **extra}
 
 
 def _schema(roles: list[str], count: int) -> dict:
@@ -102,6 +112,27 @@ def package_list() -> str:
     return ", ".join(f"{n} ({o})" if o else n for n, o in ALLOWED_PACKAGES)
 
 
+def output_contract(task_id: str, params: dict) -> str:
+    """What the pipeline needs back for this task, stated without its content or style instructions.
+    Sent in place of prompts/<task>.md when the user's own prompt replaces them."""
+    spec, days = TASKS[task_id], params.get("days")
+    kind = spec["layout"]["kind"]
+    roles = ", ".join(spec["roles"])
+    if kind == "daily":
+        return (f"Create a study plan of exactly {days} day(s). Return one allocation entry per day numbered 1 "
+                f"through {days}, with topics, workload_minutes and source_ids (exact source labels); use every "
+                f"source on at least one day. For each day N return exactly three documents, in this order: "
+                f"{roles}, each with day set to N and a title starting with the literal prefix Day N:.")
+    if kind == "schedule":
+        return (f"Build a study schedule of exactly {days} day(s). Return one allocation entry per day numbered 1 "
+                f"through {days}, with topics, workload_minutes and source_ids (exact source labels); use every "
+                f"source at least once. Return exactly three documents, in this order, each with day set to 0: "
+                f"{roles}. The schedule must name every day as Day N. The file-guide must use each exact source "
+                f"label as a \\section* heading (escape underscores as \\_).")
+    note = " It must fit on exactly one page." if spec.get("max_pages") == 1 else ""
+    return (f"Return exactly one document with role {roles} and day 0, and an empty allocation list.{note}")
+
+
 def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
     spec = TASKS[task_id]
     index = "\n".join(f"- Source {i}: {s['source_id']}"
@@ -110,8 +141,13 @@ def assemble_prompt(task_id: str, params: dict, sources: list[dict]) -> str:
                          if s.get("mode") == "text" else "")
                       + pdf_pages.mapping_note(s)
                       for i, s in enumerate(sources, 1))
-    body = resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", "")))
-    style = resource_path("prompts/" + STYLES[params["language_style"]]).read_text(encoding="utf-8")
+    if params.get("custom_prompt"):  # the user's text replaces the task and style instructions; the contract stays
+        body = (f"The student's own instructions for this {spec['label']} (follow them for content, scope and "
+                f"wording):\n\n{params['custom_prompt']}")
+        style = "Required output (the app needs this to build the PDF):\n" + output_contract(task_id, params)
+    else:
+        body = resource_path(spec["prompt_file"]).read_text(encoding="utf-8").replace("{days}", str(params.get("days", "")))
+        style = resource_path("prompts/" + STYLES[params["language_style"]]).read_text(encoding="utf-8")
     fmt = resource_path("prompts/format.md").read_text(encoding="utf-8").replace("{packages}", package_list())
     return (f"You are a study assistant.\n\nAttached sources (each document is preceded by its source label):\n"
             f"{index}\n\n{body}\n\n{style}\n\n{fmt}")

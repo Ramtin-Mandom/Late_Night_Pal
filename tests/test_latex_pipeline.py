@@ -47,6 +47,33 @@ class Workshop:
         return result, calls, sorted(p.name for p in (self.root / "Revision").iterdir())
 
 
+class CustomPrompt(unittest.TestCase):
+    def test_custom_summary_replaces_stock_instructions_and_publishes_as_summary(self):
+        from late_night_workshop import resource_path, tasks
+        mine = "Explain membranes as a story for a ten-year-old, in three paragraphs."
+        stock = resource_path("prompts/summary.md").read_text(encoding="utf-8").strip()
+        style = resource_path("prompts/styles/standard.md").read_text(encoding="utf-8").strip()
+        with Workshop() as w:
+            body = r"\section{Membranes}Cells have membranes."
+            result, calls, files = w.run("summary", [bundle(("summary", 0, "Cells", body))],
+                                         {"language_style": "Standard", "custom_prompt": mine})
+        self.assertEqual(result["status"], "ok", result.get("error"))
+        prompt = calls[0]["prompt"]
+        self.assertIn(mine, prompt)
+        self.assertNotIn(stock.splitlines()[0], prompt)
+        self.assertNotIn(style.splitlines()[0], prompt)
+        self.assertIn("role summary", prompt)  # contract kept
+        self.assertIn(tasks.package_list(), prompt)  # format.md: JSON and LaTeX rules kept
+        self.assertIn("Source 1:", prompt)
+        self.assertEqual(calls[0]["response_schema"]["properties"]["documents"]["maxItems"], 1)
+        self.assertEqual(files, ["summary.pdf"])
+
+    def test_blank_custom_prompt_is_rejected_before_any_call(self):
+        from late_night_workshop import tasks
+        with self.assertRaises(tasks.TaskError):
+            tasks.validate_parameters("summary", {"custom_prompt": "  \n "})
+
+
 class StaticChecks(unittest.TestCase):
     def test_forbidden_commands_and_environments(self):
         self.assertEqual(validation.latex_problems(r"\section*{A} \ce{H2O} \(x^2\) \begin{itemize}\item a\end{itemize}"), [])

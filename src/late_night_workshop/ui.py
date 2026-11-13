@@ -382,8 +382,8 @@ def run_app() -> int:
     from PySide6.QtCore import QEvent, QMimeData, QObject, QPoint, QSize, Qt, QThread, QTimer, QUrl, Signal
     from PySide6.QtGui import QActionGroup, QBrush, QColor, QDesktopServices, QDrag, QFontMetrics, QIcon, QPainter, QPixmap
     from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-                                   QGridLayout, QInputDialog, QLabel, QLineEdit, QProgressBar, QScrollArea, QSplitter, QSizePolicy,
-                                   QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPushButton,
+                                   QDialog, QDialogButtonBox, QGridLayout, QInputDialog, QLabel, QLineEdit, QProgressBar, QScrollArea, QSplitter, QSizePolicy,
+                                   QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton,
                                    QSpinBox, QStackedWidget, QVBoxLayout, QWidget)
 
     from .theme import apply_theme
@@ -1148,6 +1148,14 @@ def run_app() -> int:
             right.addWidget(QLabel("Task"))
             self.task_box = QComboBox()
             right.addWidget(self.task_box)
+            # Use my prompt overrides the task chosen before it; that task still decides what is generated
+            self.base_task_id = "summary"
+            self.custom_text = ""  # kept for this session, so Cancel or a failed job never loses it
+            self.custom_note = QLabel("")
+            self.custom_note.setWordWrap(True)
+            self.custom_note.setProperty("role", "support")
+            self.custom_note.setVisible(False)
+            right.addWidget(self.custom_note)
             # Single file parameter
             self.style_lbl = QLabel("Language style")
             self.style_box = QComboBox()
@@ -1245,24 +1253,69 @@ def run_app() -> int:
             self.task_box.clear()
             for task_id, label in tasks.tasks_for(output_type):
                 self.task_box.addItem(icon(task_id), label, task_id)
+            self.task_box.addItem(icon("notes"), tasks.CUSTOM_PROMPT_LABEL, tasks.CUSTOM_PROMPT_ID)
             self.task_box.blockSignals(False)
+            self.base_task_id = self.task_box.itemData(0)
             if output_type == tasks.SINGLE_FILE:
                 self.task_box.setCurrentIndex(self.task_box.findData("summary"))
             self.task_changed()
 
         def task_changed(self, *_):
             """Show the current task's parameters; selection is untouched (it lives in workshop state)."""
-            task_id = self.task_box.currentData()
+            custom = self.task_box.currentData() == tasks.CUSTOM_PROMPT_ID
+            if not custom and self.task_box.currentData():
+                self.base_task_id = self.task_box.currentData()
+            task_id = self.current_task_id()
+            self.custom_note.setVisible(custom)
+            if custom:
+                self.custom_note.setText(f"Generates: {tasks.TASKS[task_id]['label']}. Your prompt replaces its "
+                                         "built-in instructions and language style; Generate asks for it.")
             plan = tasks.TASKS.get(task_id, {}).get("output_type") == tasks.STUDY_PLAN
             for w in (self.style_lbl, self.style_box):
-                w.setVisible(not plan)
+                w.setVisible(not plan and not custom)  # the prompt replaces the style
             for w in (self.days_lbl, self.days_box, self.folder_lbl_param, self.folder_edit):
                 w.setVisible(plan)
             if plan:
                 self.folder_edit.setPlaceholderText(tasks.TASKS[task_id]["default_folder"])
 
+        def current_task_id(self) -> str:
+            """The task that will be generated: the one chosen before Use my prompt, if that is selected."""
+            data = self.task_box.currentData()
+            return self.base_task_id if data == tasks.CUSTOM_PROMPT_ID else data
+
+        def ask_custom_prompt(self) -> str | None:
+            """Multiline editor for Use my prompt; the text, or None on Cancel (nothing is sent)."""
+            dialog = QDialog(self)
+            dialog.setWindowTitle(f"Use my prompt · {tasks.TASKS[self.current_task_id()]['label']}")
+            dialog.resize(560, 360)
+            lay = QVBoxLayout(dialog)
+            lbl = QLabel(f"Write what this {tasks.TASKS[self.current_task_id()]['label']} should contain and how it "
+                         "should read. The selected files, pages and output layout stay as set.")
+            lbl.setWordWrap(True)
+            lay.addWidget(lbl)
+            editor = QPlainTextEdit(self.custom_text)
+            editor.setAccessibleName("Your prompt")
+            editor.setPlaceholderText("For example: a summary focused on the lab methods, with one table "
+                                      "comparing the experiments.")
+            lay.addWidget(editor, 1)
+            buttons = QDialogButtonBox()
+            submit = buttons.addButton("Generate", QDialogButtonBox.AcceptRole)
+            buttons.addButton(QDialogButtonBox.Cancel)
+            buttons.accepted.connect(dialog.accept)
+            buttons.rejected.connect(dialog.reject)
+            update = lambda: submit.setEnabled(bool(editor.toPlainText().strip()))
+            editor.textChanged.connect(update)
+            update()
+            lay.addWidget(buttons)
+            self.custom_dialog = dialog  # reachable for UI tests
+            editor.setFocus()
+            if dialog.exec() != QDialog.Accepted or not editor.toPlainText().strip():
+                return None
+            self.custom_text = editor.toPlainText()
+            return self.custom_text
+
         def current_parameters(self) -> dict:
-            task_id = self.task_box.currentData()
+            task_id = self.current_task_id()
             if tasks.TASKS[task_id]["output_type"] == tasks.STUDY_PLAN:
                 return {"days": self.days_box.value(), "folder_name": self.folder_edit.text()}
             return {"language_style": self.style_box.currentText()}
@@ -2531,7 +2584,13 @@ def run_app() -> int:
         def generate(self):
             if self.thread is not None or self.org_thread is not None or not make_me_status(self.state, self.page_info, self.reuse)["ok"]:
                 return  # duplicate click while running, or the selection has entries Make me can't use
-            request = build_request(self.state, self.task_box.currentData(), self.current_parameters(),
+            parameters = self.current_parameters()
+            if self.task_box.currentData() == tasks.CUSTOM_PROMPT_ID:
+                text = self.ask_custom_prompt()
+                if text is None:
+                    return  # Cancel: form and selections untouched, no provider call
+                parameters["custom_prompt"] = text
+            request = build_request(self.state, self.current_task_id(), parameters,
                                     self.provider == "codex" or self.efficient_box.isChecked(), self.provider)
             try:  # Days / Folder name / style checked before any work
                 tasks.validate_parameters(request["task_id"], request["parameters"])
