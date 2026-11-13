@@ -101,6 +101,30 @@ class Generation(unittest.TestCase):
             self.assertEqual(calls[1]["prompt"].count("membranes"), 1)  # repair carries only that document
             self.assertEqual(files, ["notes.pdf"])
 
+    WIDE = (r"\section*{Cells}" "\n" r"Counts $" + "4,1,3,5,8,10,0," * 10 + r"9$ here."  # wider than one line
+            "\n\n" r"Membranes are fine.")
+
+    def test_line_past_the_margin_gets_one_snippet_fix(self):
+        with Workshop() as w:
+            result, calls, files = w.run("notes", [
+                bundle(("notes", 0, "Cells", self.WIDE)),
+                json.dumps({"snippets": [{"id": 1, "latex": r"Counts $4$, $1$, $3$ and $5$ here."}]})])
+            self.assertEqual(result["status"], "ok", result.get("error"))
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1]["response_schema"]["required"], ["snippets"])
+            self.assertIn("4,1,3,5", calls[1]["prompt"])
+            self.assertNotIn("Membranes are fine", calls[1]["prompt"])  # only the overflowing passage is sent
+            self.assertEqual(result["warnings"], [])
+            self.assertEqual(files, ["notes.pdf"])
+
+    def test_unusable_layout_fix_keeps_the_pdf_with_a_warning(self):
+        with Workshop() as w:
+            result, calls, files = w.run("notes", [bundle(("notes", 0, "Cells", self.WIDE)), "not json"])
+            self.assertEqual(result["status"], "ok", result.get("error"))
+            self.assertEqual(len(calls), 2)
+            self.assertEqual([x["code"] for x in result["warnings"]], ["layout_overflow"])
+            self.assertEqual(files, ["notes.pdf"])
+
     def test_cheat_sheet_page_count_is_checked_on_the_pdf(self):
         long = r"\section*{Long}" + r"Membrane. \par " * 400
         with Workshop() as w:

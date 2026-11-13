@@ -17,10 +17,11 @@ They should read like an excellent tutor's printed study guide: calm pages with 
   proof (slim grey bar, ends with ∎) right after a theorem when the proof is taught.
   Never nest callouts, never put headings inside them, and do not put a callout around every paragraph: a section usually has one to three callouts plus a yourturn.
 - Tables: a booktabs table in a center block is ideal for laws, cases, or "choose this method / when to use it". Start the header row with \headrow to shade it: \headrow \textbf{Law} & \textbf{Rule} & \textbf{Example} \\ .
+- Line width: TeX can't break a line inside $4,1,3,5,\dots$, so write a long list of numbers as short math pieces ($4$, $1$, $3$, ...) or a small table, and break long display equations with aligned.
 - Inline: \keyterm{term} (bold) where a term is first defined; \highlight{short phrase} at most once or twice per document.
 - Lists: itemize and enumerate; the checklist environment gives tick boxes: \begin{checklist} \item ... \end{checklist}.
 - Practice sets: \practicesection{Practice · Multiple choice} gives a purple bar and \answersection{Answer key · Multiple choice} a green bar. Number questions with enumerate. Under a multiple-choice question put its four options in one row with \choices{A option}{B option}{C option}{D option}. In an answer key write \ans{C} followed by the one-line reason. Put \workspace after a written-response question to leave room for working. Label written questions with \subsection*{W1 · Topic}.
-- Diagrams: draw a small TikZ picture (under about 20 lines, no libraries) when a picture teaches better than words: a containment chain, a map between sets, a number line, a graph sketch, a process flow. Colours available for \textcolor and TikZ: lnpbar, lnpblue, lnpteal, lnpgreen, lnporange, lnpred, lnppurple, lnpgray.
+- Diagrams: draw a small TikZ picture (under about 20 lines, no libraries) when a picture teaches better than words: a containment chain, a map between sets, a number line, a graph sketch, a process flow. Keep it inside the text width, and leave room for each node's text: place nodes relative to the previous one, as in \node (b) [right] at ([xshift=8mm]a.east) {...}, not at fixed coordinates that labels can overlap. Colours available for \textcolor and TikZ: lnpbar, lnpblue, lnpteal, lnpgreen, lnporange, lnpred, lnppurple, lnpgray.
 - Do not use tcolorbox, \tcbset, \titleformat or \titlespacing yourself; documents containing them are rejected.
 
 Voice

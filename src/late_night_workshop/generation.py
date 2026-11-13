@@ -19,6 +19,8 @@ Recovery is bounded and every extra Gemini request is announced in progress:
   - a document fails its own checks (unsafe LaTeX, missing day heading/source label), does not
     compile, or compiles to too many pages: one targeted repair of that document only
     (its latex_code + the problem, no sources); documents that passed are never regenerated
+  - a compiled document has lines that run past the margin (LaTeX overfull boxes): one layout fix
+    that sends only those passages; if it doesn't help, the original PDF is kept with a warning
 Publish failures never call Gemini. Nothing is published until every document has passed:
 rendering happens in a temp dir and publishing is all-or-nothing.
 """
@@ -53,6 +55,53 @@ Document: role {role}, day {day}, title {title!r}
 
 Current latex_code:
 {latex_code}"""
+
+LAYOUT_REPAIR_PROMPT = """Some lines of one document of your previous response run past the right margin of
+the compiled PDF. Rewrite only the numbered snippets below so every line fits the text width. Return
+JSON {{"snippets": [{{"id": 1, "latex": "..."}}]}} with one entry per snippet; each "latex" replaces
+that whole snippet. Keep the content and meaning, and keep every \\begin and \\end that the snippet has.
+Typical fixes: split a long list of numbers in inline math into short $...$ pieces or a small table;
+break a long display equation with aligned or multline; narrow a wide table (fewer columns, p{{}}
+columns, \\small); scale down a wide TikZ picture. Follow the task's LaTeX rules below.
+
+Document: role {role}, day {day}, title {title!r}
+
+{task_prompt}
+
+Snippets (points = how far the widest line sticks out):
+{snippets}"""
+
+LAYOUT_SCHEMA = {"type": "object", "required": ["snippets"], "properties": {"snippets": {
+    "type": "array", "items": {"type": "object", "required": ["id", "latex"],
+                               "properties": {"id": {"type": "integer"}, "latex": {"type": "string"}}}}}}
+SNIPPET_MAX_LINES = 30  # an overflow is widened to its paragraph (blank-line block) up to this size
+
+
+def snippet_spans(lines: list[str], overflows: list[dict]) -> list[tuple[int, int, float]]:
+    """Overflowing body line ranges widened to their blank-line-separated block, merged:
+    [(first, last, points)], 1-based and inclusive."""
+    spans = []
+    for o in sorted(overflows, key=lambda o: o["first"]):
+        a, b = o["first"], o["last"]
+        while b > a and not lines[b - 1].strip():
+            b -= 1
+        s, e = a, b
+        while s > 1 and lines[s - 2].strip():
+            s -= 1
+        while e < len(lines) and lines[e].strip():
+            e += 1
+        if e - s + 1 > SNIPPET_MAX_LINES:
+            s, e = a, b
+        if spans and s <= spans[-1][1]:
+            spans[-1] = (min(s, spans[-1][0]), max(e, spans[-1][1]), max(o["points"], spans[-1][2]))
+        else:
+            spans.append((s, e, o["points"]))
+    return spans
+
+
+def _overflow_points(record: dict) -> float:
+    return sum(o["points"] for o in record.get("overflows") or [])
+
 
 REPAIR_PROMPT = """Your previous JSON response could not be used: {problem}.
 Return the complete corrected JSON for the same task, fixing that problem and keeping all other
@@ -160,6 +209,45 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
         raise rendering.RenderError(again["code"], f"{again['message']} (also after one repair attempt).",
                                     "\n".join(x for x in (again["problem"], log) if x), source_id=label)
 
+    def fix_layout(doc, record, task, bundle, sources, work_dir, subtitle, names):
+        """One small request for the snippets that run past the margin. Returns (record, warning or None):
+        the fixed PDF when it compiles with less overflow, else the original PDF and a warning."""
+        label = names[doc["document_id"]]
+        lines = doc["latex_code"].splitlines()
+        spans = snippet_spans(lines, record["overflows"])
+        n = len(spans)
+        progress("generating", f"{label}: {n} passage{'s run' if n != 1 else ' runs'} past the page margin; "
+                               f"asking {provider} once to fix {'them' if n != 1 else 'it'}...")
+        listing = "\n\n".join(f"--- snippet {i} ({pts} pt too wide) ---\n" + "\n".join(lines[a - 1:b])
+                              for i, (a, b, pts) in enumerate(spans, 1))
+        repair_task = dict(task, response_schema=LAYOUT_SCHEMA, prompt=LAYOUT_REPAIR_PROMPT.format(
+            role=doc["role"], day=doc["day"] or 0, title=doc["title"], task_prompt=task["prompt"], snippets=listing))
+        kept = (record, {"code": "layout_overflow", "source_id": None,
+                         "message": f"{label}: {n} passage{'s' * (n != 1)} may run past the right margin."})
+        try:
+            replacements = validation.parse_layout_repair(
+                ask_provider(repair_task, [], f"fixing the layout of {label}")["raw_text"], n)
+        except AppError:
+            return kept  # the PDF is still usable: never fail the job over layout
+        for (a, b, _), text in sorted(zip(spans, replacements), reverse=True):
+            lines[a - 1:b] = text.splitlines()
+        fixed = dict(doc, latex_code="\n".join(lines))
+        if validation.document_problems(fixed, task, sources):
+            return kept
+        before = Path(record["temp_path"]).with_name(f"{doc['document_id']}-before-layout-fix.pdf")
+        Path(record["temp_path"]).replace(before)  # the recompile writes the same name
+        kept = (dict(record, temp_path=str(before)), kept[1])
+        progress("rendering", f"Compiling {label} again...")
+        result = timed("render_s", d["render_bundle"], dict(bundle, documents=[fixed]), task, work_dir, subtitle,
+                       None, names)
+        new = result["records"][0] if result["records"] else None
+        if new is None or _overflow_points(new) >= _overflow_points(record):
+            return kept
+        doc.update(fixed)
+        left = len(snippet_spans(fixed["latex_code"].splitlines(), new["overflows"]))
+        return new, (dict(kept[1], message=f"{label}: {left} passage{'s' * (left != 1)} may still run past the "
+                                            f"right margin.") if left else None)
+
     try:
         if method not in ("codex", "gemini"):
             raise RequestError("invalid_parameter", "Choose Codex or Gemini API in Settings.")
@@ -222,10 +310,18 @@ def _generate(request, on_progress, deps, decide_inputs, payload_dir) -> dict:
             for doc in [x for x in bundle["documents"] if x["document_id"] in failures]:
                 records[doc["document_id"]] = repair_document(doc, failures[doc["document_id"]], task, bundle,
                                                               sources, work_dir, subtitle, names)
+            warnings = list(prep["warnings"])
+            for doc in bundle["documents"]:
+                if records[doc["document_id"]].get("overflows"):
+                    records[doc["document_id"]], warning = fix_layout(
+                        doc, records[doc["document_id"]], task, bundle, sources, work_dir, subtitle, names)
+                    if warning:
+                        warnings.append(warning)
+                        progress("rendering", warning["message"])
             rendered = [records[x["document_id"]] for x in bundle["documents"]]
             progress("publishing", f"Saving {len(rendered)} PDF{'s' if len(rendered) > 1 else ''}...")
             published = timed("publish_s", d["publish"], rendered, task, checked["destination"], checked["root"])
-        result = {"status": "ok", **published, "warnings": prep["warnings"], "timings": timings,
+        result = {"status": "ok", **published, "warnings": warnings, "timings": timings,
                   "generation_id": generation_id, "history_record": None,
                   "documents": [{"document_id": r["document_id"], "page_count": r.get("page_count"),
                                  "render_s": r.get("seconds")} for r in rendered]}

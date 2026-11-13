@@ -90,6 +90,21 @@ def parse_document_repair(raw_text: str) -> str:
     return code.strip()
 
 
+def parse_layout_repair(raw_text: str, count: int) -> list[str]:
+    """A layout fix returns {"snippets": [{"id", "latex"}]}: a non-empty replacement for each id 1..count."""
+    try:
+        data = json.loads(raw_text or "")
+    except json.JSONDecodeError:
+        raise _invalid("the layout fix was not valid JSON")
+    items = data.get("snippets") if isinstance(data, dict) else None
+    by_id = {x["id"]: x["latex"] for x in (items if isinstance(items, list) else [])
+             if isinstance(x, dict) and isinstance(x.get("id"), int)
+             and isinstance(x.get("latex"), str) and x["latex"].strip()}
+    if sorted(by_id) != list(range(1, count + 1)):
+        raise _invalid("the layout fix did not return every snippet")
+    return [by_id[i] for i in range(1, count + 1)]
+
+
 def _check_allocation(raw, days: list[int], source_ids: set) -> list[dict]:
     if not isinstance(raw, list):
         raise _invalid("allocation is missing")

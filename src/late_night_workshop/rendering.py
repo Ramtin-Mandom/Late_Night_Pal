@@ -15,6 +15,7 @@ PDFs stay in the caller's work_dir; the publisher picks final names.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -26,6 +27,7 @@ from . import AppError, resource_path
 COMPILERS = ("lualatex",)  # templates use fontspec + luaotfload fallback fonts for Unicode text
 COMPILE_TIMEOUT_S = 180  # per pass
 COMPILE_PASSES = 2  # at most; the second pass runs only when LaTeX asks for a rerun (references)
+OVERFLOW_PT = 5.0  # an overfull line wider than this (about 2 mm) visibly runs past the margin
 SANDBOX_MEMORY_BYTES = 2 * 1024 ** 3
 
 # The one package allowlist. The preamble loads exactly these (after the fixed fontspec,
@@ -172,16 +174,43 @@ def _latex_errors(log: Path) -> str:
     return "\n".join(out)[:2000]
 
 
+_OVERFULL = re.compile(r"^Overfull \\hbox \(([\d.]+)pt too wide\) (?:in paragraph|in alignment|detected) at lines? "
+                       r"(\d+)(?:--(\d+))?")
+
+
+def _overflows(log: Path, offset: int, body_lines: int) -> list[dict]:
+    """Body line ranges whose lines run past the text width by more than OVERFLOW_PT:
+    [{"first", "last", "points"}], 1-based lines of latex_code. Template lines are ignored."""
+    try:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    found = {}
+    for line in lines:
+        m = _OVERFULL.match(line)
+        if not m or float(m.group(1)) <= OVERFLOW_PT:
+            continue
+        first, last = int(m.group(2)) - offset, int(m.group(3) or m.group(2)) - offset
+        first, last = max(first, 1), min(last, body_lines)
+        if first > last:
+            continue  # outside the body: the template's own lines
+        key = (first, last)
+        found[key] = max(found.get(key, 0), round(float(m.group(1)), 1))
+    return [{"first": a, "last": b, "points": p} for (a, b), p in sorted(found.items())]
+
+
 def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = "",
-                     template: str = "document") -> Path:
-    """Compile {title, latex_code} to work_dir/<name>.pdf and return that temporary path."""
+                     template: str = "document", overflows: list | None = None) -> Path:
+    """Compile {title, latex_code} to work_dir/<name>.pdf and return that temporary path.
+    With an `overflows` list, appends the body line ranges that run past the margin (see _overflows)."""
     compiler = check_runtime()["compiler"]
     tex = resource_path(f"templates/{template}.tex").read_text(encoding="utf-8")
     tex = (tex.replace("<<PACKAGES>>", preamble_packages())
               .replace("<<STYLE>>", resource_path("templates/style.tex").read_text(encoding="utf-8"))
               .replace("<<TITLE>>", escape(one_line(document.get("title") or "Document")))
-              .replace("<<SUBTITLE>>", escape(subtitle))
-              .replace("<<BODY>>", document["latex_code"]))
+              .replace("<<SUBTITLE>>", escape(subtitle)))
+    offset = tex.split("<<BODY>>", 1)[0].count("\n")  # body line k is .tex line offset + k
+    tex = tex.replace("<<BODY>>", document["latex_code"])
     work_dir = Path(work_dir)
     shutil.copyfile(resource_path("templates/guard.lua"), work_dir / "lnp-guard.lua")
     (work_dir / f"{name}.tex").write_text(tex, encoding="utf-8")
@@ -200,6 +229,8 @@ def compile_document(document: dict, work_dir: Path, name: str, subtitle: str = 
                               _latex_errors(log) or "\n".join(out.splitlines()[-8:]))
         if "Rerun to get" not in out and "may have changed" not in out:
             break
+    if overflows is not None:
+        overflows += _overflows(log, offset, len(document["latex_code"].splitlines()))
     for extra in work_dir.glob(f"{name}.*"):  # .tex, .aux, .log, .out, .toc, ...: only the PDF stays
         if extra != built:
             extra.unlink(missing_ok=True)
@@ -233,10 +264,11 @@ def render_bundle(bundle: dict, task: dict, work_dir, subtitle: str = "", on_doc
                   names: dict | None = None) -> dict:
     """Compile every document of the bundle into work_dir; never stops at the first failure.
 
-    Returns {"records": [{document_id, role, day, temp_path, page_count, seconds}],
+    Returns {"records": [{document_id, role, day, temp_path, page_count, seconds, overflows}],
              "failures": {document_id: {code, message, problem, log}}}
     code is compile_failed (problem = LaTeX error lines) or page_limit_exceeded (page count
     of the compiled PDF over task max_pages). generation decides on one repair per document.
+    overflows lists body line ranges that run past the margin (the PDF is still usable).
     """
     records, failures = [], {}
     total = len(bundle["documents"])
@@ -246,8 +278,9 @@ def render_bundle(bundle: dict, task: dict, work_dir, subtitle: str = "", on_doc
         label = (names or {}).get(d["document_id"], f"{d['document_id']}.pdf")
         sub = _day_subtitle(bundle, d["day"], subtitle) if d.get("day") else subtitle
         start = time.perf_counter()
+        overflows = []
         try:
-            pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"])
+            pdf = compile_document(d, work_dir, d["document_id"], sub, task["template"], overflows)
         except RenderError as e:
             if e.code != "compile_failed":
                 raise
@@ -264,6 +297,6 @@ def render_bundle(bundle: dict, task: dict, work_dir, subtitle: str = "", on_doc
             pdf.unlink(missing_ok=True)
             continue
         records.append({"document_id": d["document_id"], "role": d["role"], "day": d["day"],
-                        "temp_path": str(pdf), "page_count": pages,
+                        "temp_path": str(pdf), "page_count": pages, "overflows": overflows,
                         "seconds": round(time.perf_counter() - start, 1)})
     return {"records": records, "failures": failures}
